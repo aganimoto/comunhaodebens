@@ -47,9 +47,9 @@ timeout /t 2 /nobreak >nul
 
 echo [3/5] Iniciando Celery Worker...
 start "CDB-Celery-Worker" cmd /c "
-    cd /d \"%BACKEND%\"
+    cd /d %BACKEND%
     set DEV_MODE=true
-    set DATABASE_URL=sqlite+aiosqlite:///%DB:\=%
+    set DATABASE_URL=sqlite+aiosqlite:///%DB:\=/%
     set JWT_SECRET_KEY=dev-jwt-secret-change-me-64-chars-minimum-for-hs256
     set WHATSAPP_WEBHOOK_SECRET=dev-webhook-secret-32-chars-long!!
     set GOOGLE_SERVICE_ACCOUNT_JSON=%ROOT%scripts\google_sa.json

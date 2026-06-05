@@ -1,16 +1,24 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Descobre a raiz do projeto (onde está o .env) independente de onde o código roda
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
+        extra="ignore",
+    )
 
     database_url: str = "postgresql+asyncpg://cdb_user:CHANGE_ME@localhost:5432/cdb_shalom"
     redis_url: str = "redis://localhost:6379/0"
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
+    celery_broker_url: str = ""
+    celery_result_backend: str = ""
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5-vl:7b"

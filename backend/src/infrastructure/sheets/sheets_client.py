@@ -13,6 +13,9 @@ _FALLBACK_DIR = Path(__file__).resolve().parent.parent.parent.parent / "dev_data
 _FALLBACK_FILE = _FALLBACK_DIR / "sheets_fallback.json"
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
 def _resolve_creds_path(path: str) -> str | None:
     """Tenta resolver o caminho do service account, buscando em locais comuns."""
     # Já é absoluto e existe
@@ -23,12 +26,17 @@ def _resolve_creds_path(path: str) -> str | None:
     if os.path.isfile(path):
         return os.path.abspath(path)
 
+    # Relativo à raiz do projeto
+    root_path = _PROJECT_ROOT / path
+    if root_path.is_file():
+        logger.info("Credenciais Google encontradas em: %s", root_path)
+        return str(root_path)
+
     # Caminhos alternativos comuns
     candidates = [
         Path.cwd() / path,
         Path.cwd() / ".." / path,
-        Path(__file__).resolve().parent.parent.parent.parent / path,  # raiz do projeto
-        Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "google_sa.json",
+        _PROJECT_ROOT / "scripts" / "google_sa.json",
         Path.home() / "Documents" / "comunhaodebens" / path,
     ]
     for c in candidates:
