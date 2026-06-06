@@ -1,228 +1,258 @@
-# CDB Shalom — Comunhão de Bens
+# CDB Shalom
 
-Sistema local (on-premise) para automatizar o recebimento e registro de contribuições PIX enviadas por comprovante no **WhatsApp**, com operação diária via **Google Sheets**.
+Sistema de gestão de contribuições e comunicação via WhatsApp para a Comunidade Católica Shalom.
 
-## Regra central
+## Visão Geral
 
-A identidade do contribuinte é definida **somente** pelo número de WhatsApp cadastrado na aba **Membros**. A IA extrai apenas valor, data, hora e banco — nunca nome ou categoria.
+O CDB Shalom é um sistema modular que automatiza o recebimento, processamento e gestão de comprovantes de contribuição dos membros da comunidade através do WhatsApp. Utiliza inteligência artificial local (Ollama) para extrair dados de imagens de comprovantes e sincroniza com Google Sheets.
 
-## Stack
+### Principais Funcionalidades
 
-| Camada | Tecnologia |
-|--------|------------|
-| Backend | Python 3.12, FastAPI, SQLAlchemy, Celery, WeasyPrint |
-| Banco | PostgreSQL 16 |
-| Fila/cache | Redis 7 |
-| OCR / IA | PaddleOCR, Ollama (qwen2.5-vl) |
-| WhatsApp | Node.js, whatsapp-web.js |
-| Admin | React 18, Vite, Tailwind, shadcn/ui |
-| Planilha | Google Sheets API |
-| Testes | pytest, fakeredis, testcontainers |
+- 📱 **Recebimento de comprovantes via WhatsApp** — membros enviam fotos/extratos e o sistema processa automaticamente
+- 🤖 **OCR + IA local** — extrai dados digitais de comprovantes usando Ollama + LLaVA
+- 📊 **Sincronização com Google Sheets** — mantém planilhas atualizadas em tempo real
+- 📈 **Dashboard administrativo** — métricas, pendências, relatórios
+- 🔄 **Relatórios mensais automáticos** — geração e distribuição via WhatsApp
+- 🔐 **Autenticação JWT** — controle de acesso por perfil (admin, financeiro, consulta)
 
-## Início rápido (produção)
+## Arquitetura
 
-### 1. Configurar ambiente
-
-```bash
-cp .env.example .env
-# Edite senhas, GOOGLE_SPREADSHEET_ID, JWT_SECRET_KEY, WHATSAPP_WEBHOOK_SECRET
-mkdir -p secrets
-# Coloque a service account em secrets/google_sa.json
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Frontend      │────▶│   Backend API    │────▶│   WhatsApp      │
+│   (Vite+React)  │◀────│   (FastAPI)      │◀────│   Service       │
+│   :5173         │     │   :8000          │     │   :3000         │
+└─────────────────┘     └────────┬─────────┘     └─────────────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+             ┌──────────┐ ┌──────────┐ ┌──────────┐
+             │PostgreSQL│ │  Redis   │ │  Ollama  │
+             │ (SQLite  │ │ (Celery  │ │ (IA      │
+             │  em dev) │ │  broker) │ │  local)  │
+             └──────────┘ └──────────┘ └──────────┘
 ```
 
-### 2. Subir serviços
+## Estrutura de Diretórios
 
-```bash
-docker compose up -d
-docker compose exec backend alembic upgrade head
+```
+comunhaodebens/
+├── README.md
+├── .gitignore
+│
+├── config/                     ← Variáveis de ambiente
+│   ├── .env.example
+│   └── README.md
+│
+├── infra/
+│   └── docker/                 ← Docker Compose e configurações
+│       ├── docker-compose.yml
+│       ├── docker-compose.dev.yml
+│       ├── ollama/Modelfile
+│       └── README.md
+│
+├── scripts/
+│   ├── README.md               ← Visão geral dos scripts
+│   ├── windows/                ← Scripts .bat / .ps1 para Windows
+│   │   ├── dev-all.bat
+│   │   ├── dev-backend.bat
+│   │   ├── dev-frontend.bat
+│   │   ├── dev-whatsapp.bat
+│   │   ├── run-backend.bat
+│   │   ├── run-frontend.bat
+│   │   ├── run-whatsapp.bat
+│   │   └── README.md
+│   └── dev/                    ← Scripts utilitários
+│       ├── seed_sheets.py
+│       ├── setup.sh
+│       └── README.md
+│
+├── docs/                       ← Documentação
+│   ├── README.md
+│   ├── ARCHITECTURE.md
+│   ├── GOOGLE_SHEETS_SETUP.md
+│   ├── OPERACAO.md
+│   ├── WHATSAPP_SETUP.md
+│   └── reports/JULES_REPORT.md
+│
+├── backend/                    ← API FastAPI (Python)
+│   ├── Dockerfile
+│   ├── pyproject.toml
+│   ├── alembic.ini
+│   ├── alembic/
+│   ├── scripts/                ← Scripts internos (bootstrap, admin)
+│   ├── src/
+│   │   ├── api/               ← Rotas FastAPI
+│   │   ├── application/       ← Casos de uso, serviços
+│   │   ├── domain/            ← Entidades, value objects
+│   │   └── infrastructure/    ← Banco, cache, IA, sheets
+│   └── tests/
+│
+├── frontend/                   ← Aplicação React (Vite)
+│   ├── Dockerfile
+│   ├── vite.config.mjs
+│   ├── src/
+│   └── public/
+│
+├── whatsapp-service/           ← Serviço WhatsApp (Node.js)
+│   ├── Dockerfile
+│   └── src/
+│
+└── shared/media/               ← Mídia compartilhada (volumes)
 ```
 
-### 3. Criar o primeiro administrador
+## Requisitos
+
+### Desenvolvimento Local
+
+- **Python** ≥ 3.11
+- **Node.js** ≥ 18
+- **Redis** (para Celery — opcional em dev sem tarefas assíncronas)
+- **Ollama** (opcional — necessário apenas para OCR/IA)
+- **Git**
+
+### Produção (Docker)
+
+- **Docker** ≥ 24
+- **Docker Compose** ≥ 2.20
+
+## Instalação
 
 ```bash
-docker compose exec backend python scripts/create_admin.py
-# ou com parâmetros próprios:
-docker compose exec backend python scripts/create_admin.py \
-    --email admin@cdbshalom.org --senha 'SenhaForte123!' --perfil administrador
-```
+# Clone o repositório
+git clone https://github.com/aganimoto/comunhaodebens.git
+cd comunhaodebens
 
-### 4. Planilha Google
+# Configure as variáveis de ambiente
+cp config/.env.example .env
 
-```bash
-docker compose exec backend python scripts/seed_sheets.py
-```
-
-Cadastre membros na aba **Membros** (telefone sem `+`, ex.: `5511999999999`).
-
-### 5. WhatsApp
-
-```bash
-docker compose logs -f whatsapp-service
-```
-
-Ou acesse a página **WhatsApp** no painel admin (`/whatsapp`) para escanear o QR Code diretamente pelo navegador. Detalhes em [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md).
-
-### 6. Painel admin
-
-- Produção: <http://localhost:5173>
-- API: <http://localhost:8000/docs>
-- Health: <http://localhost:8000/health/ready>
-
-## Modo DEV (sem Google/WhatsApp/Ollama)
-
-O modo dev substitui todas as integrações externas por mocks em memória, ideal para desenvolvimento local e para a equipe testar o painel sem precisar configurar nada.
-
-### Subir o stack em modo dev
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
-```
-
-### Sem Docker (Windows / macOS — SQLite local)
-
-Quando o Docker não estiver instalado, é possível rodar o backend com mocks em SQLite.
-A documentação detalhada do fluxo local está em [`scripts/dev-backend-local.ps1`](scripts/dev-backend-local.ps1).
-
-**Pré-requisitos:** Python 3.12+, Node.js 18+.
-
-#### Setup inicial (primeira vez)
-
-```powershell
-# 1. Backend — instalar dependências e criar banco
+# Backend (Python)
 cd backend
-pip install -e .
-python scripts/bootstrap_local_db.py   # cria SQLite e aplica migrations
-python scripts/create_admin.py         # cria primeiro admin (admin@cdbshalom.local / TroqueEstaSenha123!)
-cd ..
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate  # Linux/Mac
+pip install -e ".[dev]"
 
-# 2. Frontend — instalar dependências
-cd frontend
+# Frontend
+cd ../frontend
 npm install
-cd ..
+
+# WhatsApp Service
+cd ../whatsapp-service
+npm install
 ```
 
-#### Iniciar o ambiente (todo dia)
+## Configuração
 
-Abrir **três terminais** na raiz do projeto:
+### Variáveis de Ambiente
 
-**Terminal 1 — API:**
+Copie `config/.env.example` para `.env` na raiz e ajuste:
 
-```powershell
-.\scripts\dev-backend-local.ps1
-# Seta DEV_MODE=true, DATABASE_URL (SQLite), JWT_SECRET_KEY, etc.
-# Sobe uvicorn em http://localhost:8000 com --reload
+| Variável | Descrição | Exemplo (dev) |
+|---|---|---|
+| `DATABASE_URL` | Conexão com banco de dados | `sqlite+aiosqlite:///...` |
+| `JWT_SECRET_KEY` | Chave secreta JWT (mude em prod!) | `dev-jwt-secret-...` |
+| `CORS_ORIGINS` | Origens permitidas (CORS) | `http://localhost:5173` |
+| `WHATSAPP_SERVICE_URL` | URL do WhatsApp Service | `http://localhost:3000` |
+| `OLLAMA_BASE_URL` | URL do servidor Ollama | `http://localhost:11434` |
+| `GOOGLE_SPREADSHEET_ID` | ID da planilha Google Sheets | (opcional em dev) |
+
+Consulte `config/README.md` e `backend/src/config.py` para a lista completa.
+
+## Como Executar
+
+### Desenvolvimento (Windows)
+
+Use o script `dev-all.bat` que inicia todos os serviços em terminais separados:
+
+```cmd
+scripts\windows\dev-all.bat
 ```
 
-**Terminal 2 — WhatsApp Service (Node.js):**
+Ou inicie individualmente:
 
-```powershell
+```cmd
+scripts\windows\run-backend.bat    # Backend :8000
+scripts\windows\run-frontend.bat   # Frontend :5173
+scripts\windows\run-whatsapp.bat   # WhatsApp :3000
+```
+
+### Desenvolvimento (Linux/Mac)
+
+```bash
+# Terminal 1 - Backend
+cd backend
+pip install -e ".[dev]"
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2 - Frontend
+cd frontend
+npm run dev
+
+# Terminal 3 - WhatsApp Service
 cd whatsapp-service
-$env:PORT = "3000"
-$env:WHATSAPP_WEBHOOK_URL = "http://localhost:8000/api/v1/webhooks/whatsapp"
-$env:WHATSAPP_WEBHOOK_SECRET = "dev-webhook-secret-32-chars-long!!"
-$env:SHARED_MEDIA_PATH = "../shared/media"
-npm install
-npm run dev
-# Escaneie o QR Code exibido no terminal
+node src/index.js
 ```
 
-> **Nota:** o WhatsApp service requer Google Chrome/Chromium instalado (usa Puppeteer). Se o `npm run dev` falhar, verifique se o Chrome está acessível ou defina `PUPPETEER_EXECUTABLE_PATH` para o caminho do seu Chrome.
-
-**Terminal 3 — Painel admin:**
-
-```powershell
-cd frontend
-npm run dev
-# Vite em http://localhost:5173 com proxy /api → localhost:8000
-```
-
-#### URLs de acesso
-
-| Serviço | URL |
-|---------|-----|
-| API (Swagger) | <http://localhost:8000/docs> |
-| Painel admin | <http://localhost:5173> |
-| WhatsApp (QR Code) | <http://localhost:5173/whatsapp> |
-| Health check | <http://localhost:8000/health/ready> |
-
-> **Recomendação:** para o ambiente completo (Postgres, Celery, WhatsApp), instale o Docker Desktop e use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` conforme a seção [Modo DEV](#modo-dev-sem-googlewhatsappollama) acima.
-
-### O que muda em `DEV_MODE=true`
-
-- **Google Sheets** → usa a planilha real (requer `GOOGLE_SPREADSHEET_ID` e `GOOGLE_SERVICE_ACCOUNT_JSON` no `.env`). Para usar o mock, defina `DEV_USE_REAL_SHEETS=false`.
-- **Ollama (IA)** → parser determinístico a partir de qualquer entrada
-- **WhatsApp Service** → mensagens gravadas em `backend/dev_data/whatsapp_outbox.json` (status retorna `connected` automaticamente)
-- **pg_dump** → gera placeholder em `backend/dev_data/backups/`
-- **Relatórios PDF** → salvos em `backend/dev_data/relatorios/`
-
-### Popular dados de exemplo
+### Produção (Docker)
 
 ```bash
-docker compose exec backend python scripts/seed_dev_data.py
-# Cria 5 membros, 20 contribuições dos últimos 45 dias e 2 pendências
+# Build e start
+docker compose -f infra/docker/docker-compose.yml up -d --build
+
+# Acompanhar logs
+docker compose -f infra/docker/docker-compose.yml logs -f
 ```
 
-### Credenciais padrão do admin dev
+## Fluxo dos Scripts .bat
 
-- e-mail: `admin@cdbshalom.local`
-- senha: `TroqueEstaSenha123!`
+### `dev-all.bat`
 
-## Testes
+1. Cria diretórios `dev_data/media`, `dev_data/relatorios`, `dev_data/backups`
+2. Se banco SQLite não existe, executa `bootstrap_local_db.py` + `create_admin.py`
+3. Abre 4 terminais:
+   - **Backend API** — `uvicorn` na porta 8000
+   - **Celery Worker** — processa tarefas assíncronas
+   - **WhatsApp Service** — `node src/index.js` na porta 3000
+   - **Frontend** — `npm run dev` na porta 5173
 
-### Cobertura local (sem Docker)
+### Scripts Individuais
 
-```bash
-docker compose exec backend pip install -e ".[dev]"
-docker compose exec backend pytest
-# Cobertura é gerada em backend/htmlcov/index.html
-```
+- `run-backend.bat` — executa apenas o backend (útil para debug com logs concentrados)
+- `run-frontend.bat` — executa apenas o frontend
+- `run-whatsapp.bat` — executa apenas o WhatsApp Service
 
-### Testes de integração com testcontainers (requer Docker)
+> **Nota:** Todos os scripts usam caminhos relativos (`%~dp0..\..`) e funcionam de qualquer diretório.
 
-```bash
-docker compose exec backend pytest -m integration
-```
+## Solução de Problemas Comuns
 
-## Funcionalidades implementadas (fases 5–6)
+| Problema | Causa | Solução |
+|---|---|---|
+| `ECONNREFUSED` no frontend | Backend não está rodando | Execute `run-backend.bat` |
+| `unable to open database file` | Caminho do SQLite inválido | Use caminho com `/` (não `\`) na URL |
+| `Execution context was destroyed` | Reconexão do WhatsApp Web | O sistema tenta novamente automaticamente (3x) |
+| `auth timeout` | Sessão WhatsApp expirou | Limpe `.wwebjs_auth` e reconecte |
+| Celery não conecta | Redis não está rodando | Inicie Redis ou ignore se não usar tarefas |
+| Google Sheets não conecta | Service account não configurada | Configure `GOOGLE_SERVICE_ACCOUNT_JSON` |
 
-- **Relatório PDF mensal** (WeasyPrint) gerado automaticamente todo dia 1º às 06:00 via Celery Beat
-- **Backup real com pg_dump** diário às 02:00, com rotação dos últimos 30 arquivos
-- **shadcn/ui completo** no frontend (Button, Card, Input, Label, Table, Dialog, Toast, Badge)
-- **Cobertura ≥ 80%** com pytest + coverage (relatórios em `htmlcov/`)
-- **Testes de integração** com testcontainers (Postgres + Redis)
-- **Modo DEV** com mocks determinísticos (Sheets/Ollama/WhatsApp/pg_dump)
-- **Script `create_admin`** idempotente para o primeiro usuário
-- **Toasts** para feedback imediato em ações do painel
-- **Filtros e busca** na lista de contribuições
-- **Dialog de geração manual** de relatórios com mês/ano
-- **Página WhatsApp** (`/whatsapp`) para escanear o QR Code pelo navegador, com status em tempo real e botão de reconexão
-- **Google Sheets real no modo dev** — flag `DEV_USE_REAL_SHEETS=true` permite testar com a planilha real sem sair do modo dev
-- **WhatsApp service local** — script de dev local inclui Terminal 2 para rodar o WhatsApp service com webhook apontando para `localhost:8000`
+## Variáveis de Ambiente
 
-## Documentação
+Veja `config/.env.example` para a lista completa com valores padrão de desenvolvimento.
 
-- [Arquitetura](docs/ARCHITECTURE.md)
-- [Google Sheets](docs/GOOGLE_SHEETS_SETUP.md)
-- [WhatsApp](docs/WHATSAPP_SETUP.md)
-- [Operação (equipe financeira)](docs/OPERACAO.md)
+## Checklist de Deploy
 
-## Estrutura do repositório
-
-```
-backend/             # API, domínio, OCR, IA, tasks, PDF
-  scripts/           # create_admin.py, seed_dev_data.py, seed_sheets.py
-  tests/             # pytest + fakeredis + testcontainers
-whatsapp-service/    # Ponte WhatsApp → webhook (endpoints /whatsapp/status, /qr, /reconnect)
-frontend/            # SPA administrativa (shadcn/ui)
-  src/pages/         # Dashboard, Contribuições, Membros, WhatsApp, ...
-  src/components/ui/ # Componentes base (Button, Card, Dialog, ...)
-docs/                # Guias e diagramas
-```
-
-## Critérios de aceitação
-
-Ver seção 21 da especificação (`CDB_Shalom_Prompt_v3.md`). O projeto implementa as fases 1–6, com testes automatizados e CI-ready.
-
-## Licença
-
-Uso interno — Comunhão de Bens Shalom.
+- [ ] Alterar `JWT_SECRET_KEY` para uma chave forte e secreta
+- [ ] Alterar `WHATSAPP_WEBHOOK_SECRET` para um valor seguro
+- [ ] Configurar `DATABASE_URL` para PostgreSQL (produção)
+- [ ] Configurar `CORS_ORIGINS` com domínio real
+- [ ] Configurar `GOOGLE_SERVICE_ACCOUNT_JSON` com service account real
+- [ ] Configurar `GOOGLE_SPREADSHEET_ID` com ID da planilha
+- [ ] Ajustar `OLLAMA_BASE_URL` se Ollama estiver em servidor diferente
+- [ ] Verificar variável `DEV_MODE=false`
+- [ ] Buildar imagens Docker com `docker compose build`
+- [ ] Executar migrações: `alembic upgrade head`
+- [ ] Criar admin inicial: `python scripts/create_admin.py`
+- [ ] Configurar backup automático do banco
+- [ ] Verificar logs de todos os serviços
+- [ ] Testar recebimento de mensagem WhatsApp
+- [ ] Testar sincronização Google Sheets

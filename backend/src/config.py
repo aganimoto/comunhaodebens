@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5-vl:7b"
     ollama_fallback_model: str = "qwen2.5:7b"
+    ollama_text_model: str = "qwen3:4b"
+
+    # OCR — seleção de engine
+    ocr_engine: str = "paddle"  # "paddle" | "tesseract"
+    tesseract_cmd: str = ""  # caminho do binário tesseract (vazio = usar PATH)
+    tesseract_lang: str = "por"
 
     google_service_account_json: str = ""
     google_spreadsheet_id: str = ""

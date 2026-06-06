@@ -1,27 +1,43 @@
+"""Use case principal: recebe um comprovante PIX e orquestra o pipeline.
+
+Fluxo (Fase 4 — com status PROCESSANDO):
+
+1. Valida telefone
+2. Grava ``MensagemRecebidaModel``
+3. Identifica membro (Sheets, cache 5 min)
+4. **NOVO** — popula ``ArquivoModel`` (idempotente via ``UNIQUE(hash_sha256)``)
+5. **NOVO** — cria ``ContribuicaoModel`` com ``status='processando'`` (idempotente
+   via ``UNIQUE(hash_imagem)``) — apenas para rastreabilidade
+6. Delega o OCR+IA para a ``tasks/ocr_task.py`` (Celery em prod,
+   ``asyncio`` em dev) passando o ``arquivo_id`` e o ``contribuicao_id``
+7. A task atualiza a contribuição existente com os dados finais
+"""
 import asyncio
 import hashlib
 import logging
+import os
 import uuid
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.services.identificacao_service import IdentificacaoService
 from src.application.services.notificacao_service import NotificacaoService
 from src.application.services.protocolo_service import ProtocoloService
 from src.config import get_settings
-from src.domain.entities.contribuicao import Contribuicao, StatusContribuicao
-from src.domain.entities.pendencia import MotivoPendencia, Pendencia, StatusPendencia
+from src.domain.entities.contribuicao import StatusContribuicao
+from src.domain.entities.pendencia import MotivoPendencia, StatusPendencia
 from src.domain.events.novo_comprovante_recebido import NovoComprovanteRecebido
 from src.domain.value_objects.telefone import Telefone
 from src.infrastructure.database.models import (
+    ArquivoModel,
     AuditoriaModel,
+    ContribuicaoModel,
     MensagemRecebidaModel,
     PendenciaModel,
 )
 from src.infrastructure.database.repositories.contribuicao_repository import ContribuicaoRepository
-from src.infrastructure.sheets.config_reader import ConfigReader
 from src.infrastructure.sheets.sheets_writer import SheetsWriter
 from src.tasks.ocr_task import processar_ocr_e_ia
 
@@ -32,11 +48,6 @@ def _hash_telefone_log(telefone: str) -> str:
     return hashlib.sha256(telefone.encode()).hexdigest()[:8]
 
 
-def _hash_duplicidade(file_hash: str, telefone: str, valor_centavos: int, data_iso: str) -> str:
-    payload = f"{file_hash}{telefone}{valor_centavos}{data_iso}"
-    return hashlib.sha256(payload.encode()).hexdigest()
-
-
 class ProcessarComprovanteUseCase:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -45,7 +56,6 @@ class ProcessarComprovanteUseCase:
         self._protocolo_svc = ProtocoloService(session)
         self._contrib_repo = ContribuicaoRepository(session)
         self._sheets = SheetsWriter()
-        self._config = ConfigReader()
         self._settings = get_settings()
 
     async def executar(self, evento: NovoComprovanteRecebido) -> dict:
@@ -96,16 +106,35 @@ class ProcessarComprovanteUseCase:
             await self._tratar_nao_cadastrado(telefone, evento)
             return {"status": "pendencia", "motivo": "telefone_nao_cadastrado"}
 
+        # Checagem de duplicidade: mesmo hash_imagem já registrado?
         existente = await self._contrib_repo.get_by_hash_imagem(evento.hash_sha256)
         if existente:
-            await self._tratar_duplicata(telefone, membro.nome, existente.protocolo, evento)
+            await self._tratar_duplicata(
+                telefone, membro.nome, existente.protocolo, evento
+            )
             return {"status": "duplicado", "protocolo": existente.protocolo}
+
+        # ── NOVO (Fase 4) ──
+        # 1) Idempotência do arquivo: registra ou reaproveita o ArquivoModel
+        arquivo_id = await self._registrar_arquivo(
+            caminho=evento.caminho_arquivo,
+            hash_sha256=evento.hash_sha256,
+        )
+
+        # 2) Cria ContribuicaoModel com status PROCESSANDO (rastreabilidade).
+        #    Idempotente via UNIQUE(hash_imagem) — se o webhook foi reentregue
+        #    antes da task terminar, reaproveitamos a contribuição existente.
+        contribuicao_id = await self._criar_contribuicao_processando(
+            telefone=telefone,
+            hash_sha256=evento.hash_sha256,
+            arquivo_id=arquivo_id,
+        )
 
         # Em dev_mode, chama o OCR diretamente (síncrono) sem Celery/Redis
         if self._settings.dev_mode:
             logger.info(
-                "DEV_MODE: processando OCR síncrono para %s",
-                telefone,
+                "DEV_MODE: processando OCR síncrono para %s (contrib=%s)",
+                telefone, contribuicao_id,
             )
             try:
                 from src.tasks.ocr_task import _async_processar
@@ -117,9 +146,14 @@ class ProcessarComprovanteUseCase:
                         membro_categoria=membro.categoria,
                         caminho_arquivo=evento.caminho_arquivo,
                         hash_sha256=evento.hash_sha256,
+                        contribuicao_id=str(contribuicao_id),
+                        arquivo_id=str(arquivo_id) if arquivo_id else None,
                     )
                 )
-                return {"status": "processando", "task": "async"}
+                return {
+                    "status": "processando",
+                    "contribuicao_id": str(contribuicao_id),
+                }
             except Exception as exc:
                 logger.error("Erro ao iniciar OCR síncrono: %s", exc)
                 return {"status": "erro", "motivo": str(exc)}
@@ -131,8 +165,113 @@ class ProcessarComprovanteUseCase:
             membro_categoria=membro.categoria,
             caminho_arquivo=evento.caminho_arquivo,
             hash_sha256=evento.hash_sha256,
+            contribuicao_id=str(contribuicao_id),
+            arquivo_id=str(arquivo_id) if arquivo_id else None,
         )
-        return {"status": "processando"}
+        return {
+            "status": "processando",
+            "contribuicao_id": str(contribuicao_id),
+        }
+
+    async def _registrar_arquivo(
+        self, caminho: str, hash_sha256: str
+    ) -> uuid.UUID | None:
+        """Registra (ou reaproveita) o arquivo em ``arquivos``.
+
+        Idempotente graças ao ``UNIQUE(hash_sha256)``. Retorna o ``id`` do
+        registro (novo ou existente).
+        """
+        try:
+            existing = await self._session.execute(
+                select(ArquivoModel).where(ArquivoModel.hash_sha256 == hash_sha256)
+            )
+            found = existing.scalar_one_or_none()
+            if found is not None:
+                return found.id
+
+            tamanho = None
+            try:
+                tamanho = os.path.getsize(caminho)
+            except OSError:
+                pass
+
+            mime = None
+            lower = caminho.lower()
+            if lower.endswith((".jpg", ".jpeg")):
+                mime = "image/jpeg"
+            elif lower.endswith(".png"):
+                mime = "image/png"
+            elif lower.endswith(".pdf"):
+                mime = "application/pdf"
+
+            nome_original = os.path.basename(caminho) or None
+            arquivo = ArquivoModel(
+                id=uuid.uuid4(),
+                nome_original=nome_original,
+                caminho=caminho,
+                hash_sha256=hash_sha256,
+                tamanho_bytes=tamanho,
+                mime_type=mime,
+            )
+            self._session.add(arquivo)
+            await self._session.flush()
+            return arquivo.id
+        except Exception as exc:
+            logger.warning("Falha ao registrar arquivo %s: %s", caminho, exc)
+            return None
+
+    async def _criar_contribuicao_processando(
+        self,
+        telefone: str,
+        hash_sha256: str,
+        arquivo_id: uuid.UUID | None,
+    ) -> uuid.UUID | None:
+        """Cria uma contribuição com status ``PROCESSANDO``.
+
+        Esta contribuição é o "slot" que será atualizado pela task de
+        OCR/IA com os dados finais (valor, data, status, OCR bruto/JSON).
+
+        Se já existir uma contribuição com o mesmo ``hash_imagem``
+        (situação possível em caso de reentrega do webhook), reutiliza
+        a existente em vez de criar uma nova.
+        """
+        try:
+            existing = await self._session.execute(
+                select(ContribuicaoModel).where(
+                    ContribuicaoModel.hash_imagem == hash_sha256
+                )
+            )
+            found = existing.scalar_one_or_none()
+            if found is not None:
+                return found.id
+
+            # Gera um protocolo provisório único (placeholder) — será
+            # regenerado pela task de OCR/IA se for o caso. Como
+            # protocolo tem UNIQUE, usamos UUID truncado.
+            placeholder_protocolo = f"PROC-{uuid.uuid4().hex[:10].upper()}"
+
+            nova = ContribuicaoModel(
+                id=uuid.uuid4(),
+                protocolo=placeholder_protocolo,
+                telefone=telefone,
+                # valor=0 e data_pagamento=hoje são placeholders; a
+                # task de OCR/IA vai atualizar para os valores reais.
+                valor=0,
+                data_pagamento=datetime.utcnow().date(),
+                confianca=0,
+                status=StatusContribuicao.PROCESSANDO.value,
+                hash_imagem=hash_sha256,
+                arquivo_id=arquivo_id,
+            )
+            self._session.add(nova)
+            await self._session.flush()
+            return nova.id
+        except Exception as exc:
+            logger.warning(
+                "Falha ao criar contribuicao PROCESSANDO (hash=%s...): %s",
+                hash_sha256[:8], exc,
+            )
+            return None
 
     async def _tratar_nao_cadastrado(
         self, telefone: str, evento: NovoComprovanteRecebido

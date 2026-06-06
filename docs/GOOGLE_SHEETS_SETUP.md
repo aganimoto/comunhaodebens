@@ -27,13 +27,48 @@ Execute após subir o backend:
 docker compose exec backend python /app/scripts/seed_sheets.py
 ```
 
-Ou crie manualmente:
+### 4.1 Aba canônica: **Doações** (Fase 5+)
+
+A aba **Doações** é a **visão operacional oficial** para novos
+lançamentos. Sincroniza **CONFIRMADO** e **PENDENTE**. A aba
+``Registros`` é mantida apenas para retrocompatibilidade (não recebe
+mais dados novos).
+
+| Coluna | Origem |
+|---|---|
+| Protocolo | ``contrib.protocolo`` |
+| Data | ``contrib.data_pagamento`` |
+| Hora | ``contrib.hora_pagamento`` |
+| Nome | ``membro.nome`` |
+| Categoria | ``membro.categoria`` |
+| Valor | ``contrib.valor`` |
+| **Favorecido** | ``dados.favorecido`` (V2) |
+| **Tipo Documento** | ``PIX``/``TED``/``DOC``/``BOLETO``/``OUTRO`` |
+| Telefone | ``contrib.telefone`` |
+| **Status** | ``confirmado`` / ``pendente`` |
+| Confiança | ``contrib.confianca`` (0–100%) |
+| **OCR Bruto** | preview (100 chars) para auditoria |
+
+### 4.2 Abas legadas (retrocompatibilidade)
+
+| Aba | Status |
+|---|---|
+| Membros | Ativa (fonte de cadastro) |
+| **Registros** | **Legada** — não recebe mais dados novos |
+| Pendências | Ativa (criada automaticamente) |
+| Auditoria | Ativa (eventos do sistema + JSON da IA no campo Detalhes) |
+| Dashboard | Ativa (fórmulas operacionais) |
+| Configuração | Ativa (chave/valor — inclui ``MENSAGEM_PENDENCIA``) |
+| Relatórios | Ativa (PDFs mensais) |
+
+### 4.3 Colunas de todas as abas
 
 | Aba | Colunas |
 |-----|---------|
 | Membros | Telefone, Nome, Categoria, Ativo |
-| Registros | Protocolo, Data, Hora, Nome, Categoria, Valor (R$), Banco, Telefone, Status, Confiança (%) |
-| Pendências | ID, Data, Hora, Telefone, Nome, Motivo, Status, Observação |
+| **Doações** | (acima) |
+| Registros (legado) | Protocolo, Data, Hora, Nome, Categoria, Valor, Banco, Telefone, Status, Confiança (%) |
+| Pendências | ID, Data, Telefone, Nome, Motivo, Status, Observação |
 | Auditoria | Timestamp, Evento, Contribuição ID, Telefone, Detalhes |
 | Dashboard | (fórmulas — ver spec seção 8) |
 | Configuração | Chave, Valor, Descrição |

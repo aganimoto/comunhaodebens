@@ -1,6 +1,6 @@
 # Sobe o backend + WhatsApp service em modo dev sem Docker.
 $ErrorActionPreference = "Stop"
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = Resolve-Path "$PSScriptRoot\..\.."
 $Backend = Join-Path $Root "backend"
 $WhatsappService = Join-Path $Root "whatsapp-service"
 $DbPath = Join-Path (Join-Path $Backend "dev_data") "local.db"

@@ -1,0 +1,115 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cdb_shalom
+      POSTGRES_USER: cdb_user
+      POSTGRES_PASSWORD: cdb_dev_pwd
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  backend:
+    build:
+      context: ../../
+      dockerfile: backend/Dockerfile
+      target: dev
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ../../backend/src:/app/src
+      - ../../backend/alembic:/app/alembic
+      - ../../backend/scripts:/app/scripts
+      - ../../backend/dev_data:/app/dev_data
+      - shared_media:/shared/media
+      - shared_relatorios:/shared/relatorios
+      - shared_backups:/shared/backups
+    environment:
+      DEV_MODE: "true"
+      DEV_RELATORIOS_PATH: /app/dev_data/relatorios
+      DEV_BACKUP_PATH: /app/dev_data/backups
+      DATABASE_URL: postgresql+asyncpg://cdb_user:cdb_dev_pwd@postgres:5432/cdb_shalom
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+
+  celery-worker:
+    build:
+      context: ../../
+      dockerfile: backend/Dockerfile
+      target: dev
+    command: watchmedo auto-restart --directory=./src --pattern=*.py --recursive -- celery -A src.tasks.celery_app worker --loglevel=info
+    volumes:
+      - ../../backend/src:/app/src
+    environment:
+      DEV_MODE: "true"
+      DATABASE_URL: postgresql+asyncpg://cdb_user:cdb_dev_pwd@postgres:5432/cdb_shalom
+    depends_on:
+      - postgres
+      - redis
+
+  celery-beat:
+    build:
+      context: ../../
+      dockerfile: backend/Dockerfile
+      target: dev
+    command: celery -A src.tasks.celery_app beat --loglevel=info
+    volumes:
+      - ../../backend/src:/app/src
+    environment:
+      DEV_MODE: "true"
+      DATABASE_URL: postgresql+asyncpg://cdb_user:cdb_dev_pwd@postgres:5432/cdb_shalom
+    depends_on:
+      - celery-worker
+
+  frontend:
+    build:
+      context: ../../
+      dockerfile: frontend/Dockerfile
+      target: dev
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../../frontend/src:/app/src
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+
+  whatsapp-service:
+    build:
+      context: ../../
+      dockerfile: whatsapp-service/Dockerfile
+    volumes:
+      - ../../whatsapp-service/src:/app/src
+      - shared_media:/shared/media
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      WHATSAPP_WEBHOOK_URL: http://backend:8000/api/v1/webhooks/whatsapp
+      WHATSAPP_WEBHOOK_SECRET: dev-webhook-secret-32-chars-long!!
+      SHARED_MEDIA_PATH: /shared/media
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  shared_media:
+  shared_relatorios:
+  shared_backups:

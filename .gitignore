@@ -21,3 +21,13 @@ shared/media/*
 dev_data/
 backend/dev_data/
 coverage.xml
+
+# Build artifacts
+*.tsbuildinfo
+
+# Database files
+*.db
+
+# Logs
+logs/
+*.log

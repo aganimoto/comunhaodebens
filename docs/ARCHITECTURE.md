@@ -2,6 +2,13 @@
 
 Sistema local de automação financeira para contribuições PIX via WhatsApp.
 
+> **Status evolutivo:** o sistema passou por 7 fases de evolução (2026-06)
+> que adicionaram Tesseract OCR, parser IA V2 retrocompatível (Qwen3:4b),
+> 5 status de contribuição (incluindo PROCESSANDO e PENDENTE), persistência
+> de OCR bruto + JSON da IA, aba ``Doações`` no Sheets, reprocessamento
+> manual e dashboard expandido — sem quebrar integrações existentes.
+> Detalhes em ``docs/reports/RELATORIO_EVOLUCAO_PIX.md``.
+
 ## Regra inviolável
 
 A identidade do contribuinte é determinada **exclusivamente** pelo número de WhatsApp, consultado na aba **Membros** do Google Sheets (com cache Redis). A IA nunca identifica pessoas.

@@ -1,3 +1,4 @@
+import { rmSync } from "fs";
 import qrcode from "qrcode-terminal";
 import qrcodeImg from "qrcode";
 import whatsapp from "whatsapp-web.js";
@@ -22,6 +23,15 @@ export function getStatus() {
 
 export function getQrDataUrl() {
   return qrDataUrl;
+}
+
+export function clearAuthSession() {
+  try {
+    rmSync(".wwebjs_auth", { recursive: true, force: true });
+    console.log("Sessão de autenticação limpa.");
+  } catch {
+    // ignora se não existir
+  }
 }
 
 export function createClient(onReady) {
@@ -57,9 +67,22 @@ export function createClient(onReady) {
     qrDataUrl = null;
   });
 
-  client.on("disconnected", () => {
+  client.on("auth_failure", (msg) => {
+    console.error("Falha de autenticação:", msg);
     connectionState = "disconnected";
     qrDataUrl = null;
+    clearAuthSession();
+    scheduleReconnect(onReady);
+  });
+
+  client.on("disconnected", (reason) => {
+    console.log("WhatsApp desconectado, motivo:", reason);
+    connectionState = "disconnected";
+    qrDataUrl = null;
+    // Se foi um logout, limpa sessão
+    if (reason === "LOGOUT") {
+      clearAuthSession();
+    }
     scheduleReconnect(onReady);
   });
 

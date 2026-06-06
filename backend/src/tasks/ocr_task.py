@@ -1,18 +1,45 @@
-"""Task que combina OCR + IA para extrair dados do comprovante."""
-import asyncio
-from decimal import Decimal
+"""Task que combina OCR + IA para extrair dados do comprovante.
 
+Fase 4 — a task agora:
+
+* Recebe ``contribuicao_id`` (criada em :class:`ProcessarComprovanteUseCase`
+  com status ``PROCESSANDO``) e ``arquivo_id``.
+* Faz OCR e IA, persiste o **texto OCR bruto** e o **JSON da IA** em
+  ``contribuicoes.ocr_texto_bruto`` / ``ocr_dados_json`` /
+  ``ocr_confianca_media`` — **nunca descartados**.
+* Atualiza a contribuição existente (mesmo ``id``) com os dados finais
+  (valor, data, status, etc.), em vez de criar uma nova. A geração
+  definitiva do protocolo acontece aqui.
+* Status final:
+  * ``CONFIRMADO`` se ``confidence >= LIMIAR_CONFIANCA``
+  * ``PENDENTE`` caso contrário (substitui o antigo ``REVISAO``)
+  * ``ERRO`` se OCR/IA não retornarem nada utilizável
+"""
+import asyncio
+import logging
+import uuid
+from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy import select
+
+from src.application.services.protocolo_service import ProtocoloService
 from src.application.use_cases.registrar_contribuicao import RegistrarContribuicaoUseCase
 from src.config import get_settings
 from src.domain.entities.contribuicao import StatusContribuicao
 from src.domain.entities.pendencia import MotivoPendencia
 from src.infrastructure.database.connection import async_session_factory
-from src.infrastructure.database.models import PendenciaModel
+from src.infrastructure.database.models import (
+    ArquivoModel,
+    ContribuicaoModel,
+    PendenciaModel,
+)
 from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
 from src.infrastructure.sheets.config_reader import ConfigReader
 from src.infrastructure.sheets.sheets_writer import SheetsWriter
 from src.tasks.celery_app import celery_app
-import uuid
+
+logger = logging.getLogger(__name__)
 
 
 def _criar_ai():
@@ -22,6 +49,30 @@ def _criar_ai():
     return OllamaService()
 
 
+def _criar_ocr():
+    """Factory que devolve o serviço de OCR selecionado via Settings.
+
+    A engine é escolhida por ``OCR_ENGINE`` (``paddle`` ou ``tesseract``).
+    O retorno implementa o mesmo protocolo de :class:`PaddleOCRService`
+    (método ``processar(caminho) -> ResultadoOCR``), portanto o pipeline
+    é agnóstico à engine escolhida.
+    """
+    from src.config import get_settings
+    from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
+
+    engine = get_settings().ocr_engine.lower()
+
+    if engine == "tesseract":
+        from src.infrastructure.ocr.tesseract_ocr_service import TesseractOCRService
+
+        logger.info("OCR engine selecionada: tesseract (lang=%s)", get_settings().tesseract_lang)
+        return TesseractOCRService()
+
+    # Default: PaddleOCR (retrocompatível)
+    logger.info("OCR engine selecionada: paddle (padr\u00e3o)")
+    return PaddleOCRService()
+
+
 @celery_app.task(name="processar_ocr_e_ia")
 def processar_ocr_e_ia(
     telefone: str,
@@ -29,10 +80,18 @@ def processar_ocr_e_ia(
     membro_categoria: str,
     caminho_arquivo: str,
     hash_sha256: str,
+    contribuicao_id: str | None = None,
+    arquivo_id: str | None = None,
 ) -> dict:
     return asyncio.run(
         _async_processar(
-            telefone, membro_nome, membro_categoria, caminho_arquivo, hash_sha256
+            telefone,
+            membro_nome,
+            membro_categoria,
+            caminho_arquivo,
+            hash_sha256,
+            contribuicao_id,
+            arquivo_id,
         )
     )
 
@@ -43,8 +102,10 @@ async def _async_processar(
     membro_categoria: str,
     caminho_arquivo: str,
     hash_sha256: str,
+    contribuicao_id: str | None = None,
+    arquivo_id: str | None = None,
 ) -> dict:
-    ocr = PaddleOCRService()
+    ocr = _criar_ocr()
     resultado = ocr.processar(caminho_arquivo)
     ai = _criar_ai()
     dados = await ai.extrair_de_imagem(caminho_arquivo, resultado.texto_bruto)
@@ -56,46 +117,27 @@ async def _async_processar(
 
     async with async_session_factory() as session:
         if dados is None:
-            session.add(
-                PendenciaModel(
-                    id=uuid.uuid4(),
-                    telefone=telefone,
-                    motivo=MotivoPendencia.ERRO_PROCESSAMENTO.value,
-                )
+            # Sem retorno da IA — registra pendência e marca a contribuição
+            # (se existir) como ERRO
+            await _marcar_como_erro(
+                session=session,
+                contribuicao_id=contribuicao_id,
+                telefone=telefone,
+                membro_nome=membro_nome,
+                ocr_texto_bruto=resultado.texto_bruto,
+                ocr_confianca_media=resultado.confianca_media,
             )
-            SheetsWriter().append_pendencia(
-                uuid.uuid4(), telefone, membro_nome, MotivoPendencia.ERRO_PROCESSAMENTO.value
-            )
-            await session.commit()
             return {"status": "erro"}
 
-        # Adapta para o shape esperado pelo registrar_contribuicao
-        from datetime import date as _date, time as _time
-        from src.infrastructure.ai.response_parser import DadosComprovante
+        # Adapta V2 -> V1 (o RegistrarContribuicaoUseCase ainda usa V1)
+        from src.infrastructure.ai.response_parser import adaptar_v2_para_v1
 
-        valor = Decimal(str(getattr(dados, "valor")))
-        data = getattr(dados, "data")
-        if isinstance(data, str):
-            data = _date.fromisoformat(data)
-        hora = getattr(dados, "hora", None)
-        if isinstance(hora, str) and hora:
-            parts = hora.split(":")
-            hora = _time(int(parts[0]), int(parts[1]))
-        banco = getattr(dados, "banco", None)
-        confianca = float(getattr(dados, "confianca", 0))
-
-        parsed = DadosComprovante(
-            valor=valor,
-            data=data,
-            hora=hora,
-            banco=banco,
-            confianca=confianca,
-        )
+        parsed = adaptar_v2_para_v1(dados)
 
         status = (
             StatusContribuicao.CONFIRMADO
             if parsed.confianca >= limiar
-            else StatusContribuicao.REVISAO
+            else StatusContribuicao.PENDENTE
         )
 
         uc = RegistrarContribuicaoUseCase(session)
@@ -112,7 +154,35 @@ async def _async_processar(
             status=status,
         )
 
-        if status == StatusContribuicao.REVISAO:
+        # Atualiza a contribuição PROCESSANDO existente (se houver)
+        # com os dados finais + OCR bruto / JSON da IA / confiança média.
+        # Esta atualização é idempotente — se a contribuição PROCESSANDO
+        # não existir, criamos uma nova (caso legado).
+        await _atualizar_ou_criar_contribuicao_final(
+            session=session,
+            contribuicao_existente_id=contribuicao_id,
+            arquivo_id=arquivo_id,
+            hash_sha256=hash_sha256,
+            telefone=telefone,
+            valor=parsed.valor,
+            data_pagamento=parsed.data,
+            hora_pagamento=parsed.hora,
+            banco=parsed.banco,
+            confianca=parsed.confianca,
+            status=status,
+            protocolo=contrib.protocolo,
+            ocr_texto_bruto=resultado.texto_bruto,
+            ocr_dados_json={
+                "valor": float(dados.valor),
+                "data_pix": dados.data_pix,
+                "favorecido": dados.favorecido,
+                "tipo_documento": dados.tipo_documento,
+                "confidence": dados.confidence,
+            },
+            ocr_confianca_media=resultado.confianca_media,
+        )
+
+        if status == StatusContribuicao.PENDENTE:
             session.add(
                 PendenciaModel(
                     id=uuid.uuid4(),
@@ -123,3 +193,119 @@ async def _async_processar(
             )
         await session.commit()
         return {"status": status.value, "protocolo": contrib.protocolo}
+
+
+async def _atualizar_ou_criar_contribuicao_final(
+    session,
+    contribuicao_existente_id: str | None,
+    arquivo_id: str | None,
+    hash_sha256: str,
+    telefone: str,
+    valor: Decimal,
+    data_pagamento,
+    hora_pagamento,
+    banco: str | None,
+    confianca: float,
+    status: StatusContribuicao,
+    protocolo: str,
+    ocr_texto_bruto: str,
+    ocr_dados_json: dict,
+    ocr_confianca_media: float,
+) -> None:
+    """Atualiza a contribuição PROCESSANDO com os dados finais, ou cria
+    uma nova se não existir (fallback de robustez).
+    """
+    try:
+        # 1) Tentar atualizar a PROCESSANDO existente
+        if contribuicao_existente_id:
+            try:
+                cid = UUID(contribuicao_existente_id)
+            except ValueError:
+                cid = None
+
+            if cid is not None:
+                existing = await session.get(ContribuicaoModel, cid)
+                if existing is not None and existing.status == StatusContribuicao.PROCESSANDO.value:
+                    existing.protocolo = protocolo
+                    existing.valor = valor
+                    existing.data_pagamento = data_pagamento
+                    existing.hora_pagamento = hora_pagamento
+                    existing.banco = banco
+                    existing.confianca = confianca
+                    existing.status = status.value
+                    existing.ocr_texto_bruto = ocr_texto_bruto
+                    existing.ocr_dados_json = ocr_dados_json
+                    existing.ocr_confianca_media = ocr_confianca_media
+                    if arquivo_id:
+                        try:
+                            existing.arquivo_id = UUID(arquivo_id)
+                        except ValueError:
+                            pass
+                    return
+
+        # 2) Fallback: criar nova (não encontrou PROCESSANDO)
+        # Verifica se já existe contribuicao com este hash (evita duplicar)
+        q = await session.execute(
+            select(ContribuicaoModel).where(ContribuicaoModel.hash_imagem == hash_sha256)
+        )
+        found = q.scalar_one_or_none()
+        if found is not None:
+            # Já existe uma contribuição final — só atualiza os campos OCR
+            found.ocr_texto_bruto = ocr_texto_bruto
+            found.ocr_dados_json = ocr_dados_json
+            found.ocr_confianca_media = ocr_confianca_media
+            return
+
+        nova = ContribuicaoModel(
+            id=uuid.uuid4(),
+            protocolo=protocolo,
+            telefone=telefone,
+            valor=valor,
+            data_pagamento=data_pagamento,
+            hora_pagamento=hora_pagamento,
+            banco=banco,
+            confianca=confianca,
+            status=status.value,
+            hash_imagem=hash_sha256,
+            arquivo_id=UUID(arquivo_id) if arquivo_id else None,
+            ocr_texto_bruto=ocr_texto_bruto,
+            ocr_dados_json=ocr_dados_json,
+            ocr_confianca_media=ocr_confianca_media,
+        )
+        session.add(nova)
+    except Exception as exc:
+        logger.warning("Falha ao atualizar/criar contribuicao final: %s", exc)
+
+
+async def _marcar_como_erro(
+    session,
+    contribuicao_id: str | None,
+    telefone: str,
+    membro_nome: str,
+    ocr_texto_bruto: str,
+    ocr_confianca_media: float,
+) -> None:
+    """Marca a contribuição como ERRO e registra pendência."""
+    pendencia = PendenciaModel(
+        id=uuid.uuid4(),
+        telefone=telefone,
+        motivo=MotivoPendencia.ERRO_PROCESSAMENTO.value,
+    )
+    session.add(pendencia)
+    SheetsWriter().append_pendencia(
+        uuid.uuid4(), telefone, membro_nome, MotivoPendencia.ERRO_PROCESSAMENTO.value
+    )
+
+    if contribuicao_id:
+        try:
+            cid = UUID(contribuicao_id)
+        except ValueError:
+            cid = None
+        if cid is not None:
+            existing = await session.get(ContribuicaoModel, cid)
+            if existing is not None:
+                existing.status = StatusContribuicao.ERRO.value
+                existing.ocr_texto_bruto = ocr_texto_bruto
+                existing.ocr_confianca_media = ocr_confianca_media
+
+    await session.commit()

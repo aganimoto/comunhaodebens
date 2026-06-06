@@ -38,7 +38,8 @@ class ArquivoModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     nome_original: Mapped[str | None] = mapped_column(String(300))
     caminho: Mapped[str] = mapped_column(String(500), nullable=False)
-    hash_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # UNIQUE: garante idempotência ao registrar o mesmo arquivo duas vezes
+    hash_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     tamanho_bytes: Mapped[int | None] = mapped_column(Integer)
     mime_type: Mapped[str | None] = mapped_column(String(100))
     criado_em: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -59,6 +60,10 @@ class ContribuicaoModel(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     hash_imagem: Mapped[str] = mapped_column(String(64), unique=True)
     arquivo_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("arquivos.id"))
+    # --- Campos novos (Fase 4) — auditoria/observabilidade ---
+    ocr_texto_bruto: Mapped[str | None] = mapped_column(Text)
+    ocr_dados_json: Mapped[dict | None] = mapped_column(JSON)
+    ocr_confianca_media: Mapped[float | None] = mapped_column(Numeric(3, 2))
     criado_em: Mapped[datetime] = mapped_column(server_default=func.now())
     atualizado_em: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 

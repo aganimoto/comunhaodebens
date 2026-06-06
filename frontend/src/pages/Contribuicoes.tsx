@@ -1,6 +1,12 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Download, Search, Loader2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Download,
+  Search,
+  Loader2,
+  RefreshCw,
+  Image as ImageIcon,
+} from "lucide-react";
 import { api } from "../lib/api";
 import {
   Card,
@@ -23,6 +29,7 @@ import {
 } from "../components/ui/table";
 import { Select, SelectItem } from "../components/ui/select";
 import { formatBRL, formatDate } from "../components/ui/utils";
+import { useToast } from "../hooks/use-toast";
 
 type Item = {
   id: string;
@@ -36,7 +43,9 @@ type Item = {
 
 const STATUS_LABEL: Record<string, { label: string; variant: "default" | "warning" | "info" | "destructive" | "success" | "secondary" }> = {
   confirmado: { label: "Confirmado", variant: "success" },
-  revisao: { label: "Em revisão", variant: "warning" },
+  pendente: { label: "Pendente", variant: "warning" },
+  processando: { label: "Processando", variant: "info" },
+  revisao: { label: "Em revisão (legado)", variant: "warning" },
   duplicado: { label: "Duplicado", variant: "info" },
   erro: { label: "Erro", variant: "destructive" },
 };
@@ -44,6 +53,8 @@ const STATUS_LABEL: Record<string, { label: string; variant: "default" | "warnin
 export function Contribuicoes() {
   const [status, setStatus] = useState<string>("all");
   const [busca, setBusca] = useState("");
+  const qc = useQueryClient();
+  const { toast } = useToast();
 
   const { data, isLoading } = useQuery({
     queryKey: ["contribuicoes", status],
@@ -55,6 +66,53 @@ export function Contribuicoes() {
       return res;
     },
   });
+
+  const reprocessar = useMutation({
+    mutationFn: (id: string) =>
+      api.post(`/contribuicoes/${id}/reprocessar`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["contribuicoes"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      qc.invalidateQueries({ queryKey: ["pendencias"] });
+      toast({
+        title: "Reprocessamento iniciado",
+        description: "Aguarde alguns instantes e atualize a tela.",
+        variant: "success",
+      });
+    },
+    onError: () =>
+      toast({
+        title: "Erro ao reprocessar",
+        description: "Tente novamente em alguns instantes.",
+        variant: "destructive",
+      }),
+  });
+
+  function abrirComprovante(id: string) {
+    // Pega o token atual do auth store (Zustand)
+    // para autenticar o download do comprovante
+    // (axios não consegue fazer download via Authorization em window.open)
+    const tokenRaw = (api.defaults.headers.common as any)?.Authorization;
+    const token = typeof tokenRaw === "string" ? tokenRaw.replace("Bearer ", "") : "";
+    const baseURL = (api.defaults.baseURL || "").replace(/\/$/, "");
+    const url = `${baseURL}/contribuicoes/${id}/comprovante`;
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.blob();
+      })
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        window.open(objectUrl, "_blank", "noopener,noreferrer");
+      })
+      .catch(() =>
+        toast({
+          title: "Erro ao abrir comprovante",
+          description: "Arquivo pode não estar disponível (pré-Fase 4?).",
+          variant: "destructive",
+        })
+      );
+  }
 
   const itens = data?.items.filter((c) =>
     busca ? c.protocolo.toLowerCase().includes(busca.toLowerCase()) : true
@@ -103,7 +161,9 @@ export function Contribuicoes() {
               >
                 <SelectItem value="all">Todos</SelectItem>
                 <SelectItem value="confirmado">Confirmado</SelectItem>
-                <SelectItem value="revisao">Em revisão</SelectItem>
+                <SelectItem value="pendente">Pendente</SelectItem>
+                <SelectItem value="processando">Processando</SelectItem>
+                <SelectItem value="revisao">Em revisão (legado)</SelectItem>
                 <SelectItem value="duplicado">Duplicado</SelectItem>
                 <SelectItem value="erro">Erro</SelectItem>
               </Select>
@@ -129,11 +189,16 @@ export function Contribuicoes() {
                   <TableHead>Telefone</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Confiança</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {itens.map((c) => {
                   const st = STATUS_LABEL[c.status] ?? { label: c.status, variant: "secondary" as const };
+                  const podeReprocessar =
+                    c.status === "pendente" ||
+                    c.status === "revisao" ||
+                    c.status === "erro";
                   return (
                     <TableRow key={c.id}>
                       <TableCell className="font-mono text-xs">{c.protocolo}</TableCell>
@@ -145,6 +210,33 @@ export function Contribuicoes() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {(c.confianca * 100).toFixed(0)}%
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => abrirComprovante(c.id)}
+                            title="Ver comprovante original"
+                          >
+                            <ImageIcon className="h-4 w-4" />
+                          </Button>
+                          {podeReprocessar ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => reprocessar.mutate(c.id)}
+                              disabled={reprocessar.isPending}
+                              title="Reprocessar OCR/IA"
+                            >
+                              {reprocessar.isPending ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </Button>
+                          ) : null}
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

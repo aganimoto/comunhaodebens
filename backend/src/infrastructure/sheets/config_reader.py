@@ -38,6 +38,13 @@ DEFAULTS = {
         "registrado anteriormente (protocolo em análise: {protocolo}).\n\n"
         "Nossa equipe financeira irá verificar. Obrigado."
     ),
+    "MENSAGEM_PENDENCIA": (
+        "Olá, {nome}.\n\n"
+        "Recebemos seu comprovante.\n\n"
+        "Não foi possível validar todas as informações automaticamente.\n\n"
+        "Nossa equipe fará uma conferência manual.\n\n"
+        "Obrigado pela sua contribuição."
+    ),
     "META_MENSAL": "50000",
     "META_ANUAL": "600000",
     "LIMIAR_CONFIANCA": "0.80",

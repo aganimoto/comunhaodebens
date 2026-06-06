@@ -3,13 +3,39 @@
 ATENÇÃO: Este script NÃO recria abas que já existem na planilha.
 Ele apenas adiciona cabeçalhos se as abas estiverem vazias
 e popula a aba Configuração com valores padrão (se vazia).
-"""
 
+A partir da Fase 5 do projeto de evolução, a aba ``Doações`` é a
+referência oficial para novos registros. A aba ``Registros`` é mantida
+por retrocompatibilidade (não recebe mais dados novos) — clientes que
+ainda a consultam continuam funcionando.
+"""
 from src.infrastructure.sheets.config_reader import DEFAULTS
 from src.infrastructure.sheets.sheets_client import SheetsClient
 
 SHEETS = [
     ("Membros", ["Telefone", "Nome", "Categoria", "Ativo"]),
+    (
+        # Aba oficial para novos registros (Fase 5+). Sincroniza
+        # CONFIRMADO e PENDENTE para que o financeiro tenha visão
+        # operacional completa, mas a fonte da verdade continua sendo
+        # o banco local.
+        "Doações",
+        [
+            "Protocolo",
+            "Data",
+            "Hora",
+            "Nome",
+            "Categoria",
+            "Valor",
+            "Favorecido",   # antes "Banco" — semântico correto
+            "Tipo Documento",  # PIX / TED / DOC / BOLETO / OUTRO
+            "Telefone",
+            "Status",       # confirmado / pendente
+            "Confiança",
+            "OCR Bruto",    # primeiros 100 caracteres (auditoria)
+        ],
+    ),
+    # Mantida por retrocompatibilidade — código antigo ainda consulta
     (
         "Registros",
         [

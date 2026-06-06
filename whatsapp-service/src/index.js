@@ -1,9 +1,19 @@
 import express from "express";
-import { createClient, getClient, getStatus, getQrDataUrl } from "./client.js";
+import { createClient, getClient, getStatus, getQrDataUrl, clearAuthSession } from "./client.js";
 import { config } from "./config.js";
 import { createHealthRouter } from "./health.js";
 import { registerMessageHandler } from "./handlers/message_handler.js";
 import { sendMessage } from "./api/backend_client.js";
+
+// Captura rejeições não tratadas (ex: auth timeout do Puppeteer)
+process.on("unhandledRejection", (reason) => {
+  const msg = reason?.message || String(reason);
+  console.error("Unhandled rejection:", msg);
+  if (msg.includes("auth timeout")) {
+    console.error("Auth timeout detectado — limpando sessão para nova tentativa.");
+    clearAuthSession();
+  }
+});
 
 const app = express();
 app.use(express.json());

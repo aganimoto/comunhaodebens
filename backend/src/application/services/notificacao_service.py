@@ -40,9 +40,28 @@ class NotificacaoService:
         msg = await self._config.get("MENSAGEM_NAO_CADASTRADO", "")
         await self.enviar_texto(telefone, msg)
 
-    async def msg_revisao(self, telefone: str, protocolo: str) -> None:
+    async def msg_revisao(
+        self,
+        telefone: str,
+        protocolo: str,
+        nome: str | None = None,
+    ) -> None:
+        """Mensagem de pendência (Fase 5 — substitui msg_revisao).
+
+        Se ``nome`` for fornecido, usa ``MENSAGEM_PENDENCIA`` (template
+        preferido a partir da Fase 5). Caso contrário, cai no template
+        ``MENSAGEM_REVISAO`` legado por retrocompatibilidade.
+        """
+        if nome:
+            template = await self._config.get("MENSAGEM_PENDENCIA", "")
+            if template:
+                msg = template.format(nome=nome)
+                await self.enviar_texto(telefone, msg)
+                return
+        # Fallback: template antigo (não tem placeholder {nome})
         template = await self._config.get("MENSAGEM_REVISAO", "")
-        await self.enviar_texto(telefone, template.format(protocolo=protocolo))
+        msg = template.format(protocolo=protocolo)
+        await self.enviar_texto(telefone, msg)
 
     async def msg_erro(self, telefone: str) -> None:
         msg = await self._config.get("MENSAGEM_ERRO", "")

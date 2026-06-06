@@ -3,8 +3,44 @@ import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
 
+/**
+ * Tenta baixar a mídia com retry, pois o contexto do Puppeteer pode ser
+ * destruído durante reconexão do WhatsApp Web.
+ */
+async function downloadWithRetry(message, maxRetries = 3, delayMs = 2000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const media = await message.downloadMedia();
+      if (media) return media;
+      return null;
+    } catch (err) {
+      const isContextDestroyed =
+        err.message?.includes("Execution context was destroyed") ||
+        err.message?.includes("Protocol error") ||
+        err.message?.includes("Target closed");
+
+      if (isContextDestroyed && attempt < maxRetries) {
+        console.log(
+          `Contexto destruído ao baixar mídia (tentativa ${attempt}/${maxRetries}), aguardando ${delayMs}ms...`
+        );
+        await new Promise((r) => setTimeout(r, delayMs));
+        delayMs *= 2; // backoff exponencial
+        continue;
+      }
+
+      if (err.message?.includes("auth timeout")) {
+        console.error("Auth timeout ao baixar mídia — sessão expirou.");
+        return null;
+      }
+
+      throw err;
+    }
+  }
+  return null;
+}
+
 export async function saveMedia(message, telefone) {
-  const media = await message.downloadMedia();
+  const media = await downloadWithRetry(message);
   if (!media) return null;
 
   const ext = media.mimetype?.includes("pdf") ? "pdf" : "jpg";

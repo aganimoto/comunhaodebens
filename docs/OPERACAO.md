@@ -147,6 +147,71 @@ Em modo dev:
 - Backups viram placeholders (sem `pg_dump` real)
 - Relatórios PDF vão para `dev_data/relatorios/`
 
+## Engine de OCR (PaddleOCR / Tesseract)
+
+A partir da versão atual, o backend aceita **duas engines de OCR** para
+processar comprovantes PIX. A escolha é feita por configuração, sem
+necessidade de alterar código.
+
+| Variável | Valores | Padrão | Observação |
+|---|---|---|---|
+| `OCR_ENGINE` | `paddle` \| `tesseract` | `paddle` | Engine padrão. PaddleOCR PT-BR é mais robusto; Tesseract é mais leve. |
+| `TESSERACT_CMD` | caminho absoluto | (vazio) | Se vazio, usa o `tesseract` do `PATH`. |
+| `TESSERACT_LANG` | códigos Tesseract | `por` | Ex.: `por+eng`. |
+
+### Instalação do Tesseract (opcional)
+
+**Windows:**
+```cmd
+choco install tesseract
+# ou baixe o instalador em https://github.com/UB-Mannheim/tesseract/wiki
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-por
+```
+
+**macOS:**
+```bash
+brew install tesseract tesseract-lang
+```
+
+Em seguida instale o binding Python:
+```bash
+pip install -e ".[ocr-tesseract]"
+```
+
+### Quando usar cada engine
+
+- **PaddleOCR** (padrão): recomendado para produção quando há recursos
+  de CPU/GPU disponíveis. Melhor acurácia em textos mistos e baixos.
+- **Tesseract**: recomendado em ambientes leves (containers pequenos,
+  Raspberry Pi, CI). Acurácia um pouco menor; manter o pré-processamento
+  OpenCV (`preprocess_image`) ajuda bastante.
+
+A troca é feita reiniciando o backend após alterar `OCR_ENGINE` no `.env`.
+
+## Modelos Ollama
+
+A extração de dados do comprovante usa modelos locais Ollama.
+O sistema já vem configurado para usar `qwen2.5-vl:7b` (multimodal) como
+modelo principal e `qwen2.5:7b` como fallback de texto. A partir desta
+versão há também o modelo **Qwen3:4b** para extração baseada apenas em
+texto (após OCR), que é mais leve e rápido.
+
+| Variável | Modelo | Uso |
+|---|---|---|
+| `OLLAMA_MODEL` | `qwen2.5-vl:7b` | Visão (imagem + texto) |
+| `OLLAMA_FALLBACK_MODEL` | `qwen2.5:7b` | Texto (fallback) |
+| `OLLAMA_TEXT_MODEL` | `qwen3:4b` | Texto (recomendado após OCR) |
+
+Para baixar o `qwen3:4b` no Ollama:
+```bash
+docker compose exec ollama ollama pull qwen3:4b
+```
+
 ## Limpar dados de dev
 
 ```bash
