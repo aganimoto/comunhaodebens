@@ -11,28 +11,26 @@ set BACKEND=%ROOT%\backend
 set WHATSAPP=%ROOT%\whatsapp-service
 set FRONTEND=%ROOT%\frontend
 set MEDIA=%BACKEND%\dev_data\media
-set DB=%BACKEND%\dev_data\local.db
 
 REM ─── Criar diretorios se nao existirem ─────────────────
 if not exist "%MEDIA%" mkdir "%MEDIA%"
 if not exist "%BACKEND%\dev_data\relatorios" mkdir "%BACKEND%\dev_data\relatorios"
 if not exist "%BACKEND%\dev_data\backups" mkdir "%BACKEND%\dev_data\backups"
 
-REM ─── Bootstrap do banco SQLite ─────────────────────────
-if not exist "%DB%" (
-    echo [1/5] Criando banco SQLite...
+REM ─── Rodar migrations Alembic ──────────────────────────
+if not exist "%BACKEND%\cdb_shalom.db" (
+    echo [1/4] Criando banco SQLite via Alembic...
     cd /d "%BACKEND%"
-    python scripts\bootstrap_local_db.py
-    python scripts\create_admin.py
+    python -m alembic upgrade head
     echo Admin: admin@cdbshalom.local / TroqueEstaSenha123!
 )
 
 REM ─── Abrir terminais ───────────────────────────────────
-echo [2/5] Iniciando Backend API (porta 8000)...
+echo [2/4] Iniciando Backend API (porta 8000)...
 start "CDB-Backend" cmd /c "
     cd /d \"%BACKEND%\"
     set DEV_MODE=true
-    set DATABASE_URL=sqlite+aiosqlite:///%DB:\=/%
+    set DATABASE_URL=sqlite+aiosqlite:///./cdb_shalom.db
     set JWT_SECRET_KEY=dev-jwt-secret-change-me-64-chars-minimum-for-hs256
     set WHATSAPP_WEBHOOK_SECRET=dev-webhook-secret-32-chars-long!!
     set CORS_ORIGINS=http://localhost:5173
@@ -42,24 +40,9 @@ start "CDB-Backend" cmd /c "
     pause
 "
 
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
-echo [3/5] Iniciando Celery Worker...
-start "CDB-Celery-Worker" cmd /c "
-    cd /d %BACKEND%
-    set DEV_MODE=true
-    set DATABASE_URL=sqlite+aiosqlite:///%DB:\=/%
-    set JWT_SECRET_KEY=dev-jwt-secret-change-me-64-chars-minimum-for-hs256
-    set WHATSAPP_WEBHOOK_SECRET=dev-webhook-secret-32-chars-long!!
-    set SHARED_MEDIA_PATH=%MEDIA%
-    echo Celery Worker iniciado.
-    python -m celery -A src.tasks.celery_app worker --loglevel=info --pool=solo
-    pause
-"
-
-timeout /t 2 /nobreak >nul
-
-echo [4/5] Iniciando WhatsApp Service (porta 3000)...
+echo [3/4] Iniciando WhatsApp Service (porta 3000)...
 start "CDB-WhatsApp" cmd /c "
     cd /d \"%WHATSAPP%\"
     set PORT=3000
@@ -71,9 +54,9 @@ start "CDB-WhatsApp" cmd /c "
     pause
 "
 
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
-echo [5/5] Iniciando Frontend (porta 5173)...
+echo [4/4] Iniciando Frontend (porta 5173)...
 start "CDB-Frontend" cmd /c "
     cd /d \"%FRONTEND%\"
     echo Frontend: http://localhost:5173

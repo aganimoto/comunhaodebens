@@ -209,10 +209,9 @@ docker compose -f infra/docker/docker-compose.yml logs -f
 ### `dev-all.bat`
 
 1. Cria diretórios `dev_data/media`, `dev_data/relatorios`, `dev_data/backups`
-2. Se banco SQLite não existe, executa `bootstrap_local_db.py` + `create_admin.py`
-3. Abre 4 terminais:
+2. Se banco SQLite não existe, executa `alembic upgrade head`
+3. Abre 3 terminais:
    - **Backend API** — `uvicorn` na porta 8000
-   - **Celery Worker** — processa tarefas assíncronas
    - **WhatsApp Service** — `node src/index.js` na porta 3000
    - **Frontend** — `npm run dev` na porta 5173
 
