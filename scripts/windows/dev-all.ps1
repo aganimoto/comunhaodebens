@@ -29,8 +29,7 @@ Write-Host "[1/3] Iniciando Backend API (porta 8000)..." -ForegroundColor Yellow
 $jobBackend = Start-Job -Name "CDB-Backend" -ScriptBlock {
     param($BACKEND, $DB, $ROOT)
     Set-Location $BACKEND
-    $env:DEV_MODE = "true"
-$env:DATABASE_URL = "sqlite+aiosqlite:///./cdb_shalom.db"
+    $env:DATABASE_URL = "sqlite+aiosqlite:///./cdb_shalom.db"
     $env:JWT_SECRET_KEY = "dev-jwt-secret-change-me-64-chars-minimum-for-hs256"
     $env:WHATSAPP_WEBHOOK_SECRET = "dev-webhook-secret-32-chars-long!!"
     $env:CORS_ORIGINS = "http://localhost:5173"

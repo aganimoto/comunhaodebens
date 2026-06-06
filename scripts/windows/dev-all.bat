@@ -29,7 +29,6 @@ REM ─── Abrir terminais ────────────────�
 echo [2/4] Iniciando Backend API (porta 8000)...
 start "CDB-Backend" cmd /c "
     cd /d \"%BACKEND%\"
-    set DEV_MODE=true
     set DATABASE_URL=sqlite+aiosqlite:///./cdb_shalom.db
     set JWT_SECRET_KEY=dev-jwt-secret-change-me-64-chars-minimum-for-hs256
     set WHATSAPP_WEBHOOK_SECRET=dev-webhook-secret-32-chars-long!!
