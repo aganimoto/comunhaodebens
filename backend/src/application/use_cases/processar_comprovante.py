@@ -103,8 +103,30 @@ class ProcessarComprovanteUseCase:
 
         membro = await self._identificacao.identificar(telefone)
         if not membro:
-            await self._tratar_nao_cadastrado(telefone, evento)
-            return {"status": "pendencia", "motivo": "telefone_nao_cadastrado"}
+            # Apenas registra pendência, NÃO envia mensagem ainda.
+            # A mensagem só será enviada se o OCR confirmar que a
+            # imagem é de fato um comprovante válido.
+            pendencia = PendenciaModel(
+                id=uuid.uuid4(),
+                telefone=telefone,
+                motivo=MotivoPendencia.TELEFONE_NAO_CADASTRADO.value,
+                status=StatusPendencia.ABERTO.value,
+            )
+            self._session.add(pendencia)
+            self._session.add(
+                AuditoriaModel(
+                    evento="TELEFONE_NAO_CADASTRADO",
+                    telefone=telefone,
+                    detalhes={"telefone_hash": _hash_telefone_log(telefone)},
+                    nivel="warn",
+                )
+            )
+            self._sheets.append_pendencia(
+                pendencia.id, telefone, None,
+                MotivoPendencia.TELEFONE_NAO_CADASTRADO.value,
+            )
+            # NÃO envia mensagem ainda — aguarda confirmação do OCR
+            return {"status": "pendencia", "motivo": "telefone_nao_cadastrado", "aguardando_ocr": True}
 
         # Checagem de duplicidade: mesmo hash_imagem já registrado?
         existente = await self._contrib_repo.get_by_hash_imagem(evento.hash_sha256)

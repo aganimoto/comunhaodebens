@@ -197,8 +197,12 @@ def _parse_v1(data: dict[str, Any]) -> DadosComprovante | None:
 def parse_dados_comprovante(raw: str) -> DadosComprovanteV2 | None:
     """Faz o parse do JSON da IA, retornando sempre o schema novo (v2).
 
-    Tenta primeiro o schema novo; em caso de falha, tenta o schema antigo
-    e converte para v2. Retorna ``None`` se nenhum dos dois casar.
+    Primeiro verifica se a imagem foi classificada como comprovante válido
+    (campo ``e_comprovante``). Se ``e_comprovante`` for ``false``, retorna
+    ``None`` imediatamente.
+
+    Em seguida tenta o schema novo; em caso de falha, tenta o schema
+    antigo e converte para v2. Retorna ``None`` se nenhum dos dois casar.
     """
     json_str = _extrair_primeiro_json(raw)
     if not json_str:
@@ -208,6 +212,11 @@ def parse_dados_comprovante(raw: str) -> DadosComprovanteV2 | None:
         data = json.loads(json_str)
     except json.JSONDecodeError as exc:
         logger.warning("JSON inválido da IA: %s", exc)
+        return None
+
+    # Verifica se a IA classificou como NÃO sendo comprovante
+    if data.get("e_comprovante") is False:
+        logger.info("IA classificou a imagem como NÃO sendo comprovante válido")
         return None
 
     # 1) Tenta v2 primeiro
