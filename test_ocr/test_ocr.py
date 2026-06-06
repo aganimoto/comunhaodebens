@@ -10,8 +10,14 @@ Coloque imagens em:
 """
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
+
+# Força UTF-8 no terminal Windows
+if sys.platform == "win32":
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 # Adiciona o diretório backend ao path para importar os módulos
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
@@ -25,8 +31,8 @@ from src.infrastructure.ai.response_parser import parse_dados_comprovante
 async def testar_arquivo(caminho: Path, engine: str) -> dict:
     """Testa OCR + IA em um único arquivo."""
     print(f"\n{'='*60}")
-    print(f"📄 Arquivo: {caminho.name}")
-    print(f"   Engine: {engine}")
+    print(f"[ARQUIVO] {caminho.name}")
+    print(f"  Engine: {engine}")
 
     # 1) OCR
     if engine == "tesseract":
@@ -39,24 +45,20 @@ async def testar_arquivo(caminho: Path, engine: str) -> dict:
     except Exception as e:
         return {"arquivo": caminho.name, "status": "erro_ocr", "erro": str(e)}
 
-    if not resultado_ocr.texto_bruto.strip():
-        return {
-            "arquivo": caminho.name,
-            "status": "sem_texto_ocr",
-            "texto_ocr": "(vazio)",
-        }
-
-    print(f"   📝 OCR ({len(resultado_ocr.texto_bruto)} chars):")
-    print(f"      {resultado_ocr.texto_bruto[:200]}...")
+    texto_ocr = resultado_ocr.texto_bruto.strip() if resultado_ocr.texto_bruto else ""
+    if texto_ocr:
+        print(f"  [OCR] ({len(texto_ocr)} chars): {texto_ocr[:200]}...")
+    else:
+        print("  [OCR] (vazio) -> tentando IA multimodal direto na imagem")
 
     # 2) IA — tenta primeiro multimodal (imagem + OCR)
     ai = OllamaService()
-    dados = await ai.extrair_de_imagem(str(caminho), resultado_ocr.texto_bruto)
+    dados = await ai.extrair_de_imagem(str(caminho), texto_ocr)
     engine_usada = "multimodal"
 
-    # Se multimodal falhou, tenta só texto
-    if dados is None:
-        dados = await ai.extrair_de_texto(resultado_ocr.texto_bruto)
+    # Se multimodal falhou, tenta só texto (apenas se tiver OCR)
+    if dados is None and texto_ocr:
+        dados = await ai.extrair_de_texto(texto_ocr)
         engine_usada = "texto"
 
     if dados is None:
@@ -64,7 +66,7 @@ async def testar_arquivo(caminho: Path, engine: str) -> dict:
             "arquivo": caminho.name,
             "status": "nao_comprovante",
             "engine": engine_usada,
-            "texto_ocr": resultado_ocr.texto_bruto[:200],
+            "texto_ocr": texto_ocr[:200] if texto_ocr else "(vazio)",
         }
 
     # 3) Resultado
@@ -110,7 +112,7 @@ async def main():
         print("Coloque imagens (jpg/png) nas pastas comprovantes/ e nao_comprovantes/\n")
         return
 
-    print(f"\n🔬 Testando {len(arquivos)} arquivo(s) com {len(engines)} engine(s)...\n")
+    print(f"\n[TESTE] {len(arquivos)} arquivo(s) com {len(engines)} engine(s)...\n")
 
     resultados = []
     for caminho, categoria in arquivos:
@@ -131,7 +133,7 @@ async def main():
 
     # Exibir resumo
     print(f"\n{'='*60}")
-    print("📊 RESUMO DOS TESTES")
+    print("RESUMO DOS TESTES")
     print(f"{'='*60}")
     acertos = 0
     total = len(resultados)
@@ -142,19 +144,19 @@ async def main():
         if acertou:
             acertos += 1
 
-        icone = "✅" if acertou else "❌"
-        print(f"\n{icone} {r['arquivo']} ({r['engine']})")
-        print(f"   Esperado: {'comprovante' if esperado else 'não comprovante'}")
-        print(f"   Obtido:   {r['status']}")
+        status_icone = "[OK]" if acertou else "[ERRO]"
+        print(f"\n{status_icone} {r['arquivo']} ({r['engine']})")
+        print(f"  Esperado: {'comprovante' if esperado else 'nao comprovante'}")
+        print(f"  Obtido:   {r['status']}")
         if r["status"] == "comprovante":
-            print(f"   Valor:     R$ {r['valor']:.2f}")
-            print(f"   Data:      {r['data_pix']}")
-            print(f"   Favorecido: {r['favorecido']}")
-            print(f"   Tipo:      {r['tipo_documento']}")
-            print(f"   Confiança: {r['confidence']:.0%}")
+            print(f"  Valor:     R$ {r['valor']:.2f}")
+            print(f"  Data:      {r['data_pix']}")
+            print(f"  Favorecido: {r['favorecido']}")
+            print(f"  Tipo:      {r['tipo_documento']}")
+            print(f"  Confianca: {r['confidence']:.0%}")
 
     print(f"\n{'='*60}")
-    print(f"✅ ACERTOS: {acertos}/{total} ({acertos/total*100:.0f}%)")
+    print(f"ACERTOS: {acertos}/{total} ({acertos/total*100:.0f}%)")
     print(f"{'='*60}")
 
     # Salvar resultados em JSON
@@ -163,7 +165,7 @@ async def main():
         json.dumps(resultados, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    print(f"\n📁 Resultados salvos em: {relatorio}")
+    print(f"\nResultados salvos em: {relatorio}")
 
 
 if __name__ == "__main__":
