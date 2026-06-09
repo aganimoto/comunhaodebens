@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
@@ -29,6 +30,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { formatBRL, formatDateTime } from "../components/ui/utils";
 import { useToast } from "../hooks/use-toast";
+import { OCRProgressBar } from "../components/OCRProgressBar";
 
 type ContribuicaoResumo = {
   id: string;
@@ -61,6 +63,7 @@ type Stats = {
   valor_mes: number;
   ultimas_contribuicoes: ContribuicaoResumo[];
   pendencias_ocr: PendenciaResumo[];
+  processando_hashes?: string[];
 };
 
 const MOTIVO_LABEL: Record<string, string> = {
@@ -81,12 +84,15 @@ export function Dashboard() {
     },
   });
 
+  const [ocrHashes, setOcrHashes] = useState<string[]>([]);
+
   const reprocessar = useMutation({
     mutationFn: (id: string) =>
       api.post(`/contribuicoes/${id}/reprocessar`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dashboard-stats"] });
       qc.invalidateQueries({ queryKey: ["pendencias"] });
+      // Recarrega stats para pegar processamentos ativos
       toast({
         title: "Reprocessamento iniciado",
         description: "Aguarde alguns instantes e atualize a tela.",
@@ -100,6 +106,15 @@ export function Dashboard() {
         variant: "destructive",
       }),
   });
+
+  // Sincroniza hashes das contribuições em processamento
+  useEffect(() => {
+    if (stats?.processando_hashes && stats.processando_hashes.length > 0) {
+      setOcrHashes(stats.processando_hashes);
+    } else if (stats && stats.contribuicoes_processando === 0) {
+      setOcrHashes([]);
+    }
+  }, [stats]);
 
   const chartData = stats
     ? [
@@ -147,6 +162,21 @@ export function Dashboard() {
           tone="default"
         />
       </div>
+
+      {/* ── Progresso OCR em tempo real ── */}
+      {stats && stats.contribuicoes_processando > 0 && ocrHashes.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {ocrHashes.map((hash) => (
+            <OCRProgressBar
+              key={hash}
+              identificador={hash}
+              onConcluido={() => {
+                qc.invalidateQueries({ queryKey: ["dashboard-stats"] });
+              }}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Linha 2: status (pílulas) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

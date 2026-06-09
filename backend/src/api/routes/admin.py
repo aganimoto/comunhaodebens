@@ -67,6 +67,8 @@ class DashboardStats(BaseModel):
     valor_mes: float
     ultimas_contribuicoes: list[ContribuicaoResumo]
     pendencias_ocr: list[PendenciaResumo]
+    # Hash das imagens em processamento (para barra de progresso SSE)
+    processando_hashes: list[str] = []
 
 
 def _to_resumo_contrib(c: ContribuicaoModel) -> ContribuicaoResumo:
@@ -200,7 +202,16 @@ async def dashboard_stats(
     )
     pendencias_ocr = [_to_resumo_pendencia(p) for p in q_pend_ocr.scalars().all()]
 
+    # Buscar hashes das contribuições em processamento (para barra SSE)
+    q_hashes = await session.execute(
+        select(ContribuicaoModel.hash_imagem).where(
+            ContribuicaoModel.status == "processando"
+        )
+    )
+    processando_hashes = [row[0] for row in q_hashes.all() if row[0]]
+
     return DashboardStats(
+        processando_hashes=processando_hashes,
         total_contribuicoes=total,
         contribuicoes_confirmadas=confirmadas,
         contribuicoes_revisao=revisao,
