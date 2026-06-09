@@ -23,6 +23,18 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from src.application.services.ocr_logger import (
+    ETAPA_CLASSIFICANDO,
+    ETAPA_CONCLUIDO,
+    ETAPA_CONSULTANDO_IA,
+    ETAPA_ERRO,
+    ETAPA_IMAGEM_RECEBIDA,
+    ETAPA_INICIANDO_OCR,
+    ETAPA_TEXTO_EXTRAIDO,
+    PROGRESSO_ETAPAS,
+    criar_logger,
+    remover_logger,
+)
 from src.application.services.protocolo_service import ProtocoloService
 from src.application.use_cases.registrar_contribuicao import RegistrarContribuicaoUseCase
 from src.config import get_settings
@@ -113,13 +125,31 @@ async def _async_processar(
     from src.application.services.classificador_comprovante import eh_comprovante
     from src.infrastructure.sheets.config_reader import ConfigReader
 
+    # ── INICIALIZA LOGGER DE PROGRESSO ──
+    # Usa hash_sha256 como identificador para o frontend acompanhar via SSE
+    ocr_logger = await criar_logger(hash_sha256)
+    ocr_logger.registrar(ETAPA_IMAGEM_RECEBIDA, "andamento", f"Telefone: {telefone}", 0.1)
+
     ocr = _criar_ocr()
+
+    # OCR em andamento
+    ocr_logger.registrar(ETAPA_INICIANDO_OCR, "andamento", "Executando OCR na imagem...", 0.25)
     resultado = ocr.processar(caminho_arquivo)
+
+    # Texto extraído
+    texto_preview = resultado.texto_bruto[:100].replace("\n", " ") if resultado.texto_bruto else "(vazio)"
+    ocr_logger.registrar(
+        ETAPA_TEXTO_EXTRAIDO, "andamento",
+        f"{len(resultado.blocos)} blocos, conf={resultado.confianca_media:.1%}",
+        0.50,
+    )
+    logger.info("[OCR %s] Texto extraído: %s", hash_sha256[:8], texto_preview)
 
     # ── VALIDAÇÃO: só processa se for realmente um comprovante ──
     # A mensagem automática só é enviada se o OCR confirmar que a
     # imagem contém palavras-chave de comprovante + valor R$.
     # Se não for comprovante, marca como ERRO e não notifica.
+    ocr_logger.registrar(ETAPA_CLASSIFICANDO, "andamento", "Verificando palavras-chave...", 0.65)
     if not eh_comprovante(resultado.texto_bruto, resultado.confianca_media):
         logger.info(
             "Imagem NÃO é comprovante (conf=%.1f%%, texto=%s...) — "
@@ -127,6 +157,7 @@ async def _async_processar(
             resultado.confianca_media * 100,
             resultado.texto_bruto[:80].replace("\n", " "),
         )
+        ocr_logger.registrar_erro(ETAPA_ERRO, "Imagem não é um comprovante válido")
         async with async_session_factory() as session:
             await _marcar_como_erro(
                 session=session,
@@ -136,11 +167,15 @@ async def _async_processar(
                 ocr_texto_bruto=resultado.texto_bruto,
                 ocr_confianca_media=resultado.confianca_media,
             )
+        await remover_logger(hash_sha256)
         return {"status": "erro", "motivo": "nao_eh_comprovante"}
 
+    # IA
+    ocr_logger.registrar(ETAPA_CONSULTANDO_IA, "andamento", "Consultando Ollama...", 0.80)
     ai = _criar_ai()
     dados = await ai.extrair_de_imagem(caminho_arquivo, resultado.texto_bruto)
     if dados is None:
+        ocr_logger.registrar(ETAPA_CONSULTANDO_IA, "andamento", "Fallback: consulta via texto...", 0.85)
         dados = await ai.extrair_de_texto(resultado.texto_bruto)
 
     config = ConfigReader()
@@ -223,7 +258,14 @@ async def _async_processar(
                 )
             )
         await session.commit()
-        return {"status": status.value, "protocolo": contrib.protocolo}
+
+    # ── Concluído ──
+    ocr_logger.registrar_conclusao(
+        f"Status: {status.value}, Protocolo: {contrib.protocolo}, "
+        f"Valor: R$ {contrib.valor:.2f}, Confiança: {contrib.confianca:.0%}"
+    )
+    await remover_logger(hash_sha256)
+    return {"status": status.value, "protocolo": contrib.protocolo}
 
 
 async def _atualizar_ou_criar_contribuicao_final(
