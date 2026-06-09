@@ -35,7 +35,6 @@ from src.infrastructure.database.models import (
     PendenciaModel,
 )
 from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
-from src.infrastructure.sheets.config_reader import ConfigReader
 from src.infrastructure.sheets.sheets_writer import SheetsWriter
 from src.tasks.celery_app import celery_app
 
@@ -52,15 +51,20 @@ def _criar_ai():
 def _criar_ocr():
     """Factory que devolve o serviço de OCR selecionado via Settings.
 
-    A engine é escolhida por ``OCR_ENGINE`` (``paddle`` ou ``tesseract``).
+    A engine é escolhida por ``OCR_ENGINE`` (``easyocr``, ``tesseract`` ou ``paddle``).
     O retorno implementa o mesmo protocolo de :class:`PaddleOCRService`
     (método ``processar(caminho) -> ResultadoOCR``), portanto o pipeline
     é agnóstico à engine escolhida.
     """
     from src.config import get_settings
-    from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
 
     engine = get_settings().ocr_engine.lower()
+
+    if engine == "easyocr":
+        from src.infrastructure.ocr.easyocr_service import EasyOCRService
+
+        logger.info("OCR engine selecionada: easyocr (deep learning)")
+        return EasyOCRService()
 
     if engine == "tesseract":
         from src.infrastructure.ocr.tesseract_ocr_service import TesseractOCRService
@@ -69,6 +73,7 @@ def _criar_ocr():
         return TesseractOCRService()
 
     # Default: PaddleOCR (retrocompatível)
+    from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
     logger.info("OCR engine selecionada: paddle (padr\u00e3o)")
     return PaddleOCRService()
 
@@ -105,8 +110,34 @@ async def _async_processar(
     contribuicao_id: str | None = None,
     arquivo_id: str | None = None,
 ) -> dict:
+    from src.application.services.classificador_comprovante import eh_comprovante
+    from src.infrastructure.sheets.config_reader import ConfigReader
+
     ocr = _criar_ocr()
     resultado = ocr.processar(caminho_arquivo)
+
+    # ── VALIDAÇÃO: só processa se for realmente um comprovante ──
+    # A mensagem automática só é enviada se o OCR confirmar que a
+    # imagem contém palavras-chave de comprovante + valor R$.
+    # Se não for comprovante, marca como ERRO e não notifica.
+    if not eh_comprovante(resultado.texto_bruto, resultado.confianca_media):
+        logger.info(
+            "Imagem NÃO é comprovante (conf=%.1f%%, texto=%s...) — "
+            "marcando como ERRO sem notificar",
+            resultado.confianca_media * 100,
+            resultado.texto_bruto[:80].replace("\n", " "),
+        )
+        async with async_session_factory() as session:
+            await _marcar_como_erro(
+                session=session,
+                contribuicao_id=contribuicao_id,
+                telefone=telefone,
+                membro_nome=membro_nome,
+                ocr_texto_bruto=resultado.texto_bruto,
+                ocr_confianca_media=resultado.confianca_media,
+            )
+        return {"status": "erro", "motivo": "nao_eh_comprovante"}
+
     ai = _criar_ai()
     dados = await ai.extrair_de_imagem(caminho_arquivo, resultado.texto_bruto)
     if dados is None:
