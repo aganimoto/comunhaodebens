@@ -23,6 +23,12 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from src.application.services.debug_logger import (
+    MODULO_CLASSIFICADOR,
+    MODULO_IA,
+    MODULO_OCR,
+    get_debug_logger,
+)
 from src.application.services.ocr_logger import (
     ETAPA_CLASSIFICANDO,
     ETAPA_CONCLUIDO,

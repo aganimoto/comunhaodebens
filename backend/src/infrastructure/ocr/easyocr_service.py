@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+
+from src.application.services.debug_logger import MODULO_OCR, get_debug_logger
 from time import perf_counter
 
 from .paddle_ocr_service import BlocoOCR, ResultadoOCR
@@ -209,6 +211,8 @@ class EasyOCRService:
                 tempo_processamento_ms=0,
             )
 
+        _debug = get_debug_logger()
+
         try:
             # Processar com EasyOCR
             # IMPORTANTE: paragraph=False para evitar bug de desempacotamento
@@ -239,6 +243,18 @@ class EasyOCRService:
                 sum(b.confianca for b in blocos) / len(blocos)
                 if blocos
                 else 0.0
+            )
+
+            _debug.info(
+                MODULO_OCR,
+                "OCR concluído",
+                {
+                    "blocos": len(blocos),
+                    "confianca_media": round(conf_media, 3),
+                    "chars": len(texto_bruto),
+                    "arquivo": caminho.split("\\")[-1] if "\\" in caminho else caminho.split("/")[-1],
+                    "tempo_ms": int((perf_counter() - start) * 1000),
+                },
             )
 
             logger.debug("EasyOCR: %d blocos, conf=%.1f%%, %d chars",

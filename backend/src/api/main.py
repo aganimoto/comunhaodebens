@@ -4,7 +4,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import admin, auth, contribuicoes, health, ocr_progress, pendencias, relatorios, webhooks, whatsapp
+from src.api.routes import admin, auth, contribuicoes, debug, health, ocr_progress, pendencias, relatorios, webhooks, whatsapp
 from src.config import get_settings
 
 structlog.configure(
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router, prefix="/api/v1")
     app.include_router(whatsapp.router, prefix="/api/v1")
     app.include_router(ocr_progress.router, prefix="/api/v1")
+    app.include_router(debug.router, prefix="/api/v1")
     return app
 
 

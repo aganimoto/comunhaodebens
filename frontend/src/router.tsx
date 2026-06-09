@@ -8,6 +8,7 @@ import { Membros } from "./pages/Membros";
 import { Pendencias } from "./pages/Pendencias";
 import { Relatorios } from "./pages/Relatorios";
 import { WhatsAppConnect } from "./pages/WhatsAppConnect";
+import { DebugPanel } from "./components/DebugPanel";
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);

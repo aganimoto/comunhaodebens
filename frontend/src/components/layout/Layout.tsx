@@ -3,6 +3,7 @@ import { LogOut, BarChart3, FileText, AlertTriangle, Users, Folder, MessageCircl
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { useAuthStore } from "../../stores/auth.store";
+import { DebugPanel } from "../DebugPanel";
 
 const links = [
   { to: "/", label: "Dashboard", icon: BarChart3 },
@@ -57,6 +58,7 @@ export function Layout() {
       <main className="flex-1 p-8 overflow-y-auto">
         <Outlet />
       </main>
+      <DebugPanel />
     </div>
   );
 }
