@@ -16,7 +16,7 @@ export async function notifyBackend(payload) {
       "Content-Type": "application/json",
       "X-HMAC-Signature": signature,
     },
-    timeout: 30000,
+    timeout: 120000,
   });
   return response.data;
 }
