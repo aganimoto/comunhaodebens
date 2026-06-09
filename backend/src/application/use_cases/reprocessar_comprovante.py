@@ -1,27 +1,27 @@
 """Use case: reprocessa um comprovante a partir da imagem original.
 
-Cenário de uso: o financeiro clica em "Reprocessar" no painel para um
+Cenario de uso: o financeiro clica em "Reprocessar" no painel para um
 comprovante em status PENDENTE ou ERRO. O sistema reexecuta OCR + IA
-na imagem original e atualiza a contribuição (sem precisar reenviar
+na imagem original e atualiza a contribuicao (sem precisar reenviar
 o comprovante pelo WhatsApp).
 
 Fluxo:
 
-1. Carrega a contribuição por ``id``.
+1. Carrega a contribuicao por ``id``.
 2. Carrega o ``ArquivoModel`` apontado por ``arquivo_id`` (ou, se
    ausente, tenta localizar via hash_imagem).
 3. Executa OCR + IA via factory ``_criar_ocr()`` / ``_criar_ai()``.
-4. Atualiza a contribuição existente **no mesmo registro** (mesmo
+4. Atualiza a contribuicao existente **no mesmo registro** (mesmo
    ``id``), preservando ``protocolo`` e ``arquivo_id``.
-5. Persiste OCR bruto / JSON / confiança média (Fase 4).
+5. Persiste OCR bruto / JSON / confianca media (Fase 4).
 6. Re-sincroniza Sheets (via ``RegistrarContribuicaoUseCase``) — na
-   prática, adiciona uma nova linha na aba ``Doações`` (o Sheets é
+   pratica, adiciona uma nova linha na aba ``Doacoes`` (o Sheets e
    append-only). A fonte da verdade continua sendo o banco.
-7. Envia notificação WhatsApp apropriada.
+7. Envia notificacao WhatsApp apropriada.
 
-O reprocessamento é **idempotente** com relação ao banco (atualiza o
-mesmo registro), mas gera uma nova linha no Sheets. Em cenários de
-reprocessamento, é aceitável ter a linha nova no Sheets para auditoria.
+O reprocessamento e **idempotente** com relacao ao banco (atualiza o
+mesmo registro), mas gera uma nova linha no Sheets. Em cenarios de
+reprocessamento, e aceitavel ter a linha nova no Sheets para auditoria.
 """
 import asyncio
 import logging
@@ -45,11 +45,33 @@ from src.infrastructure.database.models import (
     MensagemRecebidaModel,
     PendenciaModel,
 )
-from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
 from src.infrastructure.sheets.config_reader import ConfigReader
 from src.infrastructure.sheets.sheets_writer import SheetsWriter
 
 logger = logging.getLogger(__name__)
+
+
+def _criar_ocr():
+    """Factory que seleciona a engine OCR conforme configuracao (OCR_ENGINE).
+
+    Engine padrao: easyocr (leitura com Pillow, resolve caracteres especiais).
+    """
+    engine = get_settings().ocr_engine.lower()
+
+    if engine == "easyocr":
+        from src.infrastructure.ocr.easyocr_service import EasyOCRService
+        logger.info("OCR engine: easyocr (Pillow + deep learning)")
+        return EasyOCRService()
+
+    if engine == "tesseract":
+        from src.infrastructure.ocr.tesseract_ocr_service import TesseractOCRService
+        logger.info("OCR engine: tesseract")
+        return TesseractOCRService()
+
+    # Default: PaddleOCR (retrocompativel)
+    from src.infrastructure.ocr.paddle_ocr_service import PaddleOCRService
+    logger.info("OCR engine: paddle (fallback)")
+    return PaddleOCRService()
 
 
 class ReprocessarComprovante:
@@ -63,15 +85,15 @@ class ReprocessarComprovante:
         self._protocolo = ProtocoloService(session)
 
     async def executar(self, contribuicao_id: UUID) -> dict:
-        """Reprocessa a contribuição apontada por ``contribuicao_id``.
+        """Reprocessa a contribuicao apontada por ``contribuicao_id``.
 
-        Retorna um dicionário com o status final e o protocolo. Lança
-        ``ValueError`` se a contribuição não for encontrada.
+        Retorna um dicionario com o status final e o protocolo. Lanca
+        ``ValueError`` se a contribuicao nao for encontrada.
         """
         # 1) Carregar contribuicao
         contrib = await self._session.get(ContribuicaoModel, contribuicao_id)
         if contrib is None:
-            raise ValueError(f"Contribuição {contribuicao_id} não encontrada")
+            raise ValueError(f"Contribuicao {contribuicao_id} nao encontrada")
 
         # 2) Carregar arquivo
         caminho = None
@@ -94,15 +116,15 @@ class ReprocessarComprovante:
 
         if not caminho:
             raise ValueError(
-                f"Arquivo original não localizado para contribuição {contribuicao_id}"
+                f"Arquivo original nao localizado para contribuicao {contribuicao_id}"
             )
 
         logger.info(
-            "Reprocessando contribuição %s a partir de %s", contribuicao_id, caminho
+            "Reprocessando contribuicao %s a partir de %s", contribuicao_id, caminho
         )
 
-        # 3) OCR
-        ocr = PaddleOCRService()
+        # 3) OCR — usar factory que respeita OCR_ENGINE (padrao: easyocr)
+        ocr = _criar_ocr()
         resultado = ocr.processar(caminho)
 
         # 4) IA
@@ -111,9 +133,9 @@ class ReprocessarComprovante:
         if dados is None:
             dados = await ai.extrair_de_texto(resultado.texto_bruto)
 
-        # 5) Atualizar contribuição no banco (idempotente)
+        # 5) Atualizar contribuicao no banco (idempotente)
         if dados is None:
-            # Sem retorno da IA — marca como ERRO e cria pendência
+            # Sem retorno da IA — marca como ERRO e cria pendencia
             contrib.status = StatusContribuicao.ERRO.value
             contrib.ocr_texto_bruto = resultado.texto_bruto
             contrib.ocr_confianca_media = resultado.confianca_media
@@ -155,7 +177,7 @@ class ReprocessarComprovante:
             else StatusContribuicao.PENDENTE
         )
 
-        # 7) Atualizar a contribuição (mesmo id, mesmo protocolo)
+        # 7) Atualizar a contribuicao (mesmo id, mesmo protocolo)
         contrib.valor = parsed.valor
         contrib.data_pagamento = parsed.data
         contrib.hora_pagamento = parsed.hora
@@ -172,7 +194,7 @@ class ReprocessarComprovante:
         }
         contrib.ocr_confianca_media = resultado.confianca_media
 
-        # 8) Registrar pendência se for PENDENTE
+        # 8) Registrar pendencia se for PENDENTE
         if novo_status == StatusContribuicao.PENDENTE:
             self._session.add(
                 PendenciaModel(
@@ -190,7 +212,7 @@ class ReprocessarComprovante:
                 contribuicao_id=contrib.id,
                 telefone=contrib.telefone,
                 detalhes={
-                    "status_anterior": None,  # poderíamos ler antes, simplificamos
+                    "status_anterior": None,
                     "status_novo": novo_status.value,
                     "confianca": parsed.confianca,
                     "ocr_confianca_media": resultado.confianca_media,
@@ -199,13 +221,10 @@ class ReprocessarComprovante:
             )
         )
 
-        # 10) Sheets: nova linha na aba Doações (append-only)
-        # Tentamos obter o nome/categoria via membro_id se possível
+        # 10) Sheets: nova linha na aba Doacoes (append-only)
         membro_nome = "(reprocessamento)"
         membro_categoria = "n/d"
         if contrib.membro_id:
-            # Não temos o repository de membro aqui — usar placeholder
-            # A UI pode completar com JOIN se precisar
             pass
 
         self._sheets.append_doacao(

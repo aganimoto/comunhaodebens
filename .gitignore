@@ -1,8 +1,12 @@
 .env
 secrets/
+
+# JSON: excluir tudo exceto resultados OC
 *.json
+!test_ocr/*.json
 !package.json
 !package-lock.json
+
 __pycache__/
 *.py[cod]
 .pytest_cache/

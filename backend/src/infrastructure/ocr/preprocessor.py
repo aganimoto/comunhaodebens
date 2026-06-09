@@ -1,12 +1,40 @@
+import logging
 import tempfile
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
+
+def _ler_imagem_segura(caminho: str):
+    """Tenta ler imagem: primeiro com OpenCV, fallback para Pillow.
+
+    OpenCV falha com caracteres especiais (parenteses, acentos) no Windows.
+    Pillow funciona com qualquer nome de arquivo.
+    """
+    # Tentativa 1: OpenCV
+    img = cv2.imread(caminho)
+    if img is not None:
+        return img
+
+    # Tentativa 2: Pillow (resolve caracteres especiais)
+    try:
+        from PIL import Image
+
+        pil_img = Image.open(caminho)
+        if pil_img.mode != "RGB":
+            pil_img = pil_img.convert("RGB")
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    except Exception as exc:
+        logger.warning("Falha ao ler imagem com Pillow: %s", exc)
+        return None
+
 
 def preprocess_image(caminho: str) -> str:
-    img = cv2.imread(caminho)
+    """Pre-processa imagem para OCR com fallback Pillow."""
+    img = _ler_imagem_segura(caminho)
     if img is None:
         return caminho
 
