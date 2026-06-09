@@ -106,24 +106,34 @@ class ProcessarComprovanteUseCase:
             # Apenas registra pendência, NÃO envia mensagem ainda.
             # A mensagem só será enviada se o OCR confirmar que a
             # imagem é de fato um comprovante válido.
+            # Usa o nome_sugerido (pushname do WhatsApp) como dica
+            nome_sugestao = evento.nome_sugerido
+            observacao = ""
+            if nome_sugestao:
+                observacao = f"Nome sugerido: {nome_sugestao}"
             pendencia = PendenciaModel(
                 id=uuid.uuid4(),
                 telefone=telefone,
                 motivo=MotivoPendencia.TELEFONE_NAO_CADASTRADO.value,
                 status=StatusPendencia.ABERTO.value,
+                observacao=observacao or None,
             )
             self._session.add(pendencia)
             self._session.add(
                 AuditoriaModel(
                     evento="TELEFONE_NAO_CADASTRADO",
                     telefone=telefone,
-                    detalhes={"telefone_hash": _hash_telefone_log(telefone)},
+                    detalhes={
+                        "telefone_hash": _hash_telefone_log(telefone),
+                        "nome_sugerido": nome_sugestao,
+                    },
                     nivel="warn",
                 )
             )
             self._sheets.append_pendencia(
                 pendencia.id, telefone, None,
                 MotivoPendencia.TELEFONE_NAO_CADASTRADO.value,
+                observacao if nome_sugestao else "",
             )
             # NÃO envia mensagem ainda — aguarda confirmação do OCR
             return {"status": "pendencia", "motivo": "telefone_nao_cadastrado", "aguardando_ocr": True}

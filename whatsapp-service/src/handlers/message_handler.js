@@ -58,6 +58,15 @@ export function registerMessageHandler(client) {
       if (message.from.includes("@g.us")) return;
       if (message.fromMe) return;
 
+      // ── Ignorar STATUS / STORIES ──
+      // WhatsApp envia stories como mensagens de imagem que NÃO
+      // devem ser processadas como comprovantes.
+      // isStatus: true para status/stories
+      if (message.isStatus) {
+        console.log("Status/story ignorado - não é comprovante");
+        return;
+      }
+
       const chat = await message.getChat();
       if (chat.isGroup) return;
 
@@ -87,6 +96,15 @@ export function registerMessageHandler(client) {
         return;
       }
 
+      // Extrair pushname para sugestão de nome (útil para telefones não cadastrados)
+      let nomeSugerido = "";
+      try {
+        const contact = await message.getContact();
+        nomeSugerido = (contact.pushname || "").trim();
+      } catch (_) {
+        // ignora falha ao obter pushname
+      }
+
       // Formata como E.164 (+55 + DDD + número)
       const telefoneFormatado = "+" + (telefone.startsWith("55") ? telefone : "55" + telefone);
 
@@ -98,6 +116,7 @@ export function registerMessageHandler(client) {
         tipo_midia: saved.ext === "pdf" ? "documento" : "imagem",
         caminho_arquivo: saved.filepath,
         hash_sha256: saved.hash,
+        nome_sugerido: nomeSugerido,
       };
 
       console.log("Enviando webhook para backend:", payload.evento, payload.telefone, "msg_id:", payload.whatsapp_msg_id);

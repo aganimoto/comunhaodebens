@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     ollama_text_model: str = "qwen3:4b"
 
     # OCR — seleção de engine
-    ocr_engine: str = "paddle"  # "paddle" | "tesseract"
+    ocr_engine: str = "easyocr"  # "easyocr" | "paddle" | "tesseract"
     tesseract_cmd: str = ""  # caminho do binário tesseract (vazio = usar PATH)
     tesseract_lang: str = "por"
 

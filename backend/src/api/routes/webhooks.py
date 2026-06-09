@@ -22,6 +22,7 @@ class WhatsAppWebhookPayload(BaseModel):
     tipo_midia: str
     caminho_arquivo: str
     hash_sha256: str
+    nome_sugerido: str = ""
 
 
 def _verify_hmac(body: bytes, signature: str | None) -> None:

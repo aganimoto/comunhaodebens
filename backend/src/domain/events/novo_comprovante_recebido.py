@@ -10,3 +10,4 @@ class NovoComprovanteRecebido:
     tipo_midia: str
     caminho_arquivo: str
     hash_sha256: str
+    nome_sugerido: str = ""
