@@ -102,11 +102,11 @@ class ProcessarComprovanteUseCase:
         )
 
         membro = await self._identificacao.identificar(telefone)
+        nome_membro = membro.nome if membro else "(não cadastrado)"
+        categoria_membro = membro.categoria if membro else "benfeitor"
+
         if not membro:
             # Apenas registra pendência, NÃO envia mensagem ainda.
-            # A mensagem só será enviada se o OCR confirmar que a
-            # imagem é de fato um comprovante válido.
-            # Usa o nome_sugerido (pushname do WhatsApp) como dica
             nome_sugestao = evento.nome_sugerido
             observacao = ""
             if nome_sugestao:
@@ -135,71 +135,67 @@ class ProcessarComprovanteUseCase:
                 MotivoPendencia.TELEFONE_NAO_CADASTRADO.value,
                 observacao if nome_sugestao else "",
             )
-            # NÃO envia mensagem ainda — aguarda confirmação do OCR
-            return {"status": "pendencia", "motivo": "telefone_nao_cadastrado", "aguardando_ocr": True}
 
         # Checagem de duplicidade: mesmo hash_imagem já registrado?
         existente = await self._contrib_repo.get_by_hash_imagem(evento.hash_sha256)
         if existente:
             await self._tratar_duplicata(
-                telefone, membro.nome, existente.protocolo, evento
+                telefone, nome_membro, existente.protocolo, evento
             )
             return {"status": "duplicado", "protocolo": existente.protocolo}
 
-        # ── NOVO (Fase 4) ──
-        # 1) Idempotência do arquivo: registra ou reaproveita o ArquivoModel
+        # ── REGISTRA ARQUIVO ──
         arquivo_id = await self._registrar_arquivo(
             caminho=evento.caminho_arquivo,
             hash_sha256=evento.hash_sha256,
         )
 
-        # 2) Cria ContribuicaoModel com status PROCESSANDO (rastreabilidade).
-        #    Idempotente via UNIQUE(hash_imagem) — se o webhook foi reentregue
-        #    antes da task terminar, reaproveitamos a contribuição existente.
+        # ── CRIA CONTRIBUIÇÃO PROCESSANDO ──
         contribuicao_id = await self._criar_contribuicao_processando(
             telefone=telefone,
             hash_sha256=evento.hash_sha256,
             arquivo_id=arquivo_id,
         )
 
-        # Em dev_mode, chama o OCR diretamente (síncrono) sem Celery/Redis
+        # ── EXECUTA OCR + IA (sempre, mesmo se não cadastrado) ──
+        # O OCR é executado para qualquer comprovante recebido. Mesmo que
+        # o telefone não seja cadastrado, extraímos os dados para registro.
+        # A mensagem automática só será enviada depois da validação.
+        logger.info(
+            "Iniciando OCR para %s (membro=%s, contrib=%s)",
+            telefone, nome_membro, contribuicao_id,
+        )
+
         if self._settings.dev_mode:
-            logger.info(
-                "DEV_MODE: processando OCR síncrono para %s (contrib=%s)",
-                telefone, contribuicao_id,
-            )
             try:
                 from src.tasks.ocr_task import _async_processar
 
                 asyncio.create_task(
                     _async_processar(
                         telefone=telefone,
-                        membro_nome=membro.nome,
-                        membro_categoria=membro.categoria,
+                        membro_nome=nome_membro,
+                        membro_categoria=categoria_membro,
                         caminho_arquivo=evento.caminho_arquivo,
                         hash_sha256=evento.hash_sha256,
                         contribuicao_id=str(contribuicao_id),
                         arquivo_id=str(arquivo_id) if arquivo_id else None,
                     )
                 )
-                return {
-                    "status": "processando",
-                    "contribuicao_id": str(contribuicao_id),
-                }
             except Exception as exc:
                 logger.error("Erro ao iniciar OCR síncrono: %s", exc)
-                return {"status": "erro", "motivo": str(exc)}
+        else:
+            processar_ocr_e_ia.delay(
+                telefone=telefone,
+                membro_nome=nome_membro,
+                membro_categoria=categoria_membro,
+                caminho_arquivo=evento.caminho_arquivo,
+                hash_sha256=evento.hash_sha256,
+                contribuicao_id=str(contribuicao_id),
+                arquivo_id=str(arquivo_id) if arquivo_id else None,
+            )
 
-        # Produção: delega ao Celery via Redis
-        processar_ocr_e_ia.delay(
-            telefone=telefone,
-            membro_nome=membro.nome,
-            membro_categoria=membro.categoria,
-            caminho_arquivo=evento.caminho_arquivo,
-            hash_sha256=evento.hash_sha256,
-            contribuicao_id=str(contribuicao_id),
-            arquivo_id=str(arquivo_id) if arquivo_id else None,
-        )
+        if not membro:
+            return {"status": "pendencia", "motivo": "telefone_nao_cadastrado", "aguardando_ocr": True}
         return {
             "status": "processando",
             "contribuicao_id": str(contribuicao_id),
