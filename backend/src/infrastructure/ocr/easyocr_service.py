@@ -238,6 +238,13 @@ class EasyOCRService:
                         blocos.append(bloco)
                         texto_parts.append(texto)
 
+                        # Log detalhado de cada bloco (debug)
+                        _debug.debug(
+                            MODULO_OCR,
+                            f"Bloco: \"{texto[:60]}\" conf={min(float(conf), 1.0):.2f}",
+                            {"conf": round(min(float(conf), 1.0), 3), "texto": texto},
+                        )
+
             texto_bruto = "\n".join(texto_parts)
             conf_media = (
                 sum(b.confianca for b in blocos) / len(blocos)
@@ -254,6 +261,7 @@ class EasyOCRService:
                     "chars": len(texto_bruto),
                     "arquivo": caminho.split("\\")[-1] if "\\" in caminho else caminho.split("/")[-1],
                     "tempo_ms": int((perf_counter() - start) * 1000),
+                    "texto_preview": texto_bruto[:200],
                 },
             )
 
