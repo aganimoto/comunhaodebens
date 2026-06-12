@@ -1,84 +1,141 @@
-# Configuração do Google Sheets
+# Google Sheets — Configuração
 
-## 1. Criar projeto no Google Cloud
+O Google Sheets é o **único banco de dados** do sistema CDB Shalom.
 
-1. Acesse [Google Cloud Console](https://console.cloud.google.com/).
-2. Crie um projeto (ex.: `cdb-shalom`).
-3. Ative a **Google Sheets API**.
+---
 
-## 2. Service Account
+## 1. Criar Service Account
 
-1. IAM → Service Accounts → Criar conta.
-2. Baixe a chave JSON.
-3. Salve como `secrets/google_sa.json` (não commitar).
-4. No `.env`, defina `GOOGLE_SERVICE_ACCOUNT_JSON=/run/secrets/google_sa.json`.
+1. Acesse [Google Cloud Console](https://console.cloud.google.com/)
+2. Crie um novo projeto (ou selecione um existente)
+3. Ative a API **Google Sheets API**
+4. Crie uma **Service Account**:
+   - Menu: IAM & Admin → Service Accounts
+   - Clique em "Create Service Account"
+   - Nome: `cdb-shalom` (ou similar)
+   - Role: não precisa atribuir
+5. Na service account criada, vá em "Keys" → "Add Key" → "Create new key"
+   - Tipo: JSON
+   - Baixe o arquivo
 
-## 3. Planilha
-
-1. Crie uma planilha no Google Sheets.
-2. Compartilhe com o e-mail da service account (Editor).
-3. Copie o ID da URL para `GOOGLE_SPREADSHEET_ID`.
-
-## 4. Abas obrigatórias
-
-Execute após subir o backend:
+## 2. Configurar .env
 
 ```bash
-docker compose exec backend python /app/scripts/seed_sheets.py
+# Caminho absoluto para o JSON da service account
+GOOGLE_SERVICE_ACCOUNT_JSON=/caminho/para/service-account.json
+
+# ID da planilha (trecho da URL)
+GOOGLE_SPREADSHEET_ID=1wvY1TRVT4EskO50kB1r_8YEBfadqIKdtEMowdoyFFW0
 ```
 
-### 4.1 Aba canônica: **Doações** (Fase 5+)
+> O `GOOGLE_SPREADSHEET_ID` está na URL da planilha:
+> `https://docs.google.com/spreadsheets/d/1wvY1TRVT4EskO50kB1r_8YEBfadqIKdtEMowdoyFFW0/edit`
+> O ID é `1wvY1TRVT4EskO50kB1r_8YEBfadqIKdtEMowdoyFFW0`.
 
-A aba **Doações** é a **visão operacional oficial** para novos
-lançamentos. Sincroniza **CONFIRMADO** e **PENDENTE**. A aba
-``Registros`` é mantida apenas para retrocompatibilidade (não recebe
-mais dados novos).
+## 3. Compartilhar a planilha
 
-| Coluna | Origem |
-|---|---|
-| Protocolo | ``contrib.protocolo`` |
-| Data | ``contrib.data_pagamento`` |
-| Hora | ``contrib.hora_pagamento`` |
-| Nome | ``membro.nome`` |
-| Categoria | ``membro.categoria`` |
-| Valor | ``contrib.valor`` |
-| **Favorecido** | ``dados.favorecido`` (V2) |
-| **Tipo Documento** | ``PIX``/``TED``/``DOC``/``BOLETO``/``OUTRO`` |
-| Telefone | ``contrib.telefone`` |
-| **Status** | ``confirmado`` / ``pendente`` |
-| Confiança | ``contrib.confianca`` (0–100%) |
-| **OCR Bruto** | preview (100 chars) para auditoria |
+1. Abra a planilha no Google Sheets
+2. Clique em "Compartilhar" (ícone de compartilhamento)
+3. Adicione o e-mail da service account (formato: `nome@projeto.iam.gserviceaccount.com`)
+4. Permissão: **Editor**
 
-### 4.2 Abas legadas (retrocompatibilidade)
+## 4. Estrutura das abas
 
-| Aba | Status |
-|---|---|
-| Membros | Ativa (fonte de cadastro) |
-| **Registros** | **Legada** — não recebe mais dados novos |
-| Pendências | Ativa (criada automaticamente) |
-| Auditoria | Ativa (eventos do sistema + JSON da IA no campo Detalhes) |
-| Dashboard | Ativa (fórmulas operacionais) |
-| Configuração | Ativa (chave/valor — inclui ``MENSAGEM_PENDENCIA``) |
-| Relatórios | Ativa (PDFs mensais) |
+### Aba `Membros` (obrigatória)
+| Coluna | Descrição |
+|--------|-----------|
+| Telefone | Número com DDD (ex: `11999998888`) |
+| Nome | Nome completo do membro |
+| Categoria | Ex: `jovem`, `adulto`, `líder` |
+| Ativo | `true` ou `false` |
 
-### 4.3 Colunas de todas as abas
+### Aba `Doações` (dados do OCR)
+| Coluna | Descrição |
+|--------|-----------|
+| Protocolo | ID único (ex: `20260612-A1B2C3`) |
+| Data | Data ISO 8601 (ex: `2026-06-12`) |
+| Nome | Nome do membro |
+| Categoria | Categoria do membro |
+| Valor | Valor em R$ (ex: `150.00`) |
+| Favorecido | Nome do destinatário do PIX |
+| Telefone | Telefone do membro |
+| Status | `CONFIRMADO` ou `PENDENTE` |
+| Confiança | Percentual (ex: `67%`) |
+| OCR Preview | Preview do texto OCR (100 chars) |
 
-| Aba | Colunas |
-|-----|---------|
-| Membros | Telefone, Nome, Categoria, Ativo |
-| **Doações** | (acima) |
-| Registros (legado) | Protocolo, Data, Hora, Nome, Categoria, Valor, Banco, Telefone, Status, Confiança (%) |
-| Pendências | ID, Data, Telefone, Nome, Motivo, Status, Observação |
-| Auditoria | Timestamp, Evento, Contribuição ID, Telefone, Detalhes |
-| Dashboard | (fórmulas — ver spec seção 8) |
-| Configuração | Chave, Valor, Descrição |
-| Relatórios | Mês, Ano, Data Geração, Caminho Arquivo, Status |
+### Aba `Registros` (legado, retrocompatível)
+Mantida para compatibilidade com código antigo. Estrutura simplificada:
+Protocolo, Data, Nome, Categoria, Valor, Telefone, Status, Confiança.
 
-## 5. Categorias válidas
+### Aba `Pendências`
+| Coluna | Descrição |
+|--------|-----------|
+| ID | UUID da pendência |
+| Data | Data ISO 8601 |
+| Telefone | Telefone do membro |
+| Nome | Nome do membro |
+| Motivo | Tipo da pendência |
+| Status | `aberto` |
+| Observação | Detalhes adicionais |
 
-`comunidade_de_vida`, `comunidade_de_alianca`, `obra`, `benfeitor`
+### Aba `Auditoria`
+| Coluna | Descrição |
+|--------|-----------|
+| Timestamp | Data/hora ISO 8601 |
+| Evento | Tipo do evento (ex: `OCR_CONCLUIDO`) |
+| Detalhes | Descrição detalhada |
 
-## 6. Cache
+### Aba `Configuração`
+| Coluna | Descrição |
+|--------|-----------|
+| Chave | Nome da configuração |
+| Valor | Valor da configuração |
 
-- Membros: TTL padrão 5 min (`CACHE_MEMBROS_TTL_MIN` na aba Configuração).
-- Invalidar: `POST /api/v1/admin/cache/flush` (perfil ADMINISTRADOR).
+Exemplo de configurações:
+- `LIMIAR_CONFIANCA` = `0.80`
+- `MENSAGEM_BEM_VINDO` = `Olá! Envie seu comprovante de contribuição.`
+
+### Aba `Dashboard` (opcional)
+| Coluna | Descrição |
+|--------|-----------|
+| Indicador | Nome do indicador |
+| Valor | Valor do indicador |
+
+## 5. Inicializar a planilha (seed)
+
+```bash
+cd backend
+python -m src.infrastructure.sheets.seed
+```
+
+Este script:
+- Cria as abas que não existem
+- Adiciona cabeçalhos se as abas estiverem vazias
+- Popula a aba Configuração com valores padrão
+
+## 6. Backup
+
+O Google Sheets tem histórico de versões nativo:
+- Arquivo → Histórico de versões → Ver histórico de versões
+- Pode restaurar qualquer versão anterior
+
+Para backup externo:
+```bash
+# Exportar como Excel
+pip install gspread
+python scripts/backup_sheets.py
+```
+
+## 7. Permissões da API
+
+A service account precisa das seguintes permissões:
+- `https://www.googleapis.com/auth/spreadsheets` (leitura e escrita)
+
+## 8. Problemas comuns
+
+| Problema | Causa | Solução |
+|----------|-------|---------|
+| `403 Forbidden` | Planilha não compartilhada | Compartilhe com o e-mail da service account |
+| `404 Not Found` | ID da planilha incorreto | Verifique o `GOOGLE_SPREADSHEET_ID` |
+| `Quota exceeded` | Muitas requisições | Aguarde 1 minuto ou use cache Redis |
+| `Service account not found` | JSON não configurado | Verifique o caminho em `GOOGLE_SERVICE_ACCOUNT_JSON` |

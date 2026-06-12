@@ -15,15 +15,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+asyncpg://cdb_user:CHANGE_ME@localhost:5432/cdb_shalom"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = ""
     celery_result_backend: str = ""
 
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5-vl:7b"
-    ollama_fallback_model: str = "qwen2.5:7b"
-    ollama_text_model: str = "qwen3:4b"
+    ollama_model: str = "llama3.2:1b"
+    ollama_fallback_model: str = "llama3.2:1b"
+    ollama_text_model: str = "llama3.2:1b"
 
     # OCR — seleção de engine
     ocr_engine: str = "easyocr"  # "easyocr" | "paddle" | "tesseract"

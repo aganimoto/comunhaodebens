@@ -4,10 +4,9 @@ ATENÇÃO: Este script NÃO recria abas que já existem na planilha.
 Ele apenas adiciona cabeçalhos se as abas estiverem vazias
 e popula a aba Configuração com valores padrão (se vazia).
 
-A partir da Fase 5 do projeto de evolução, a aba ``Doações`` é a
-referência oficial para novos registros. A aba ``Registros`` é mantida
-por retrocompatibilidade (não recebe mais dados novos) — clientes que
-ainda a consultam continuam funcionando.
+Estrutura atual (Fase 5 — extração via regex, sem IA):
+- ``Doações``: aba principal, sem Hora/Tipo Documento (não extraídos)
+- ``Registros``: mantido por retrocompatibilidade
 """
 from src.infrastructure.sheets.config_reader import DEFAULTS
 from src.infrastructure.sheets.sheets_client import SheetsClient
@@ -15,37 +14,28 @@ from src.infrastructure.sheets.sheets_client import SheetsClient
 SHEETS = [
     ("Membros", ["Telefone", "Nome", "Categoria", "Ativo"]),
     (
-        # Aba oficial para novos registros (Fase 5+). Sincroniza
-        # CONFIRMADO e PENDENTE para que o financeiro tenha visão
-        # operacional completa, mas a fonte da verdade continua sendo
-        # o banco local.
         "Doações",
         [
             "Protocolo",
             "Data",
-            "Hora",
             "Nome",
             "Categoria",
             "Valor",
-            "Favorecido",   # antes "Banco" — semântico correto
-            "Tipo Documento",  # PIX / TED / DOC / BOLETO / OUTRO
+            "Favorecido",
             "Telefone",
-            "Status",       # confirmado / pendente
+            "Status",
             "Confiança",
-            "OCR Bruto",    # primeiros 100 caracteres (auditoria)
+            "OCR Preview",
         ],
     ),
-    # Mantida por retrocompatibilidade — código antigo ainda consulta
     (
         "Registros",
         [
             "Protocolo",
             "Data",
-            "Hora",
             "Nome",
             "Categoria",
             "Valor",
-            "Banco",
             "Telefone",
             "Status",
             "Confiança",
@@ -63,7 +53,6 @@ def seed_spreadsheet() -> None:
     if not client.available:
         raise RuntimeError("Google Sheets não configurado (credenciais ou SPREADSHEET_ID)")
 
-    # Obter abas existentes
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
 
@@ -81,7 +70,6 @@ def seed_spreadsheet() -> None:
     meta = service.spreadsheets().get(spreadsheetId=client._spreadsheet_id).execute()
     abas_existentes = {s["properties"]["title"] for s in meta.get("sheets", [])}
 
-    # Criar apenas abas que não existem
     for title, _ in SHEETS:
         if title not in abas_existentes:
             try:
@@ -101,7 +89,6 @@ def seed_spreadsheet() -> None:
             except Exception as e:
                 print(f"  Aba '{title}' já existe ou erro: {e}")
 
-    # Adicionar cabeçalhos apenas se a aba estiver vazia
     for title, headers in SHEETS:
         result = (
             service.spreadsheets()
@@ -114,7 +101,6 @@ def seed_spreadsheet() -> None:
             client.append_row(title, headers)
             print(f"  Cabeçalhos adicionados em '{title}'.")
 
-    # Popular Configuração apenas se estiver vazia (só cabeçalho)
     config_rows = (
         service.spreadsheets()
         .values()

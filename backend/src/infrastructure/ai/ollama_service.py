@@ -1,149 +1,192 @@
-"""Cliente Ollama para extração estruturada de dados de comprovantes PIX.
+"""Cliente Ollama para classificação de comprovantes PIX.
 
-Suporta dois fluxos complementares:
-
-* **extrair_de_imagem** — usa o modelo multimodal
-  (``OLLAMA_MODEL``, padrão ``qwen2.5-vl:7b``) para processar a imagem
-  diretamente, opcionalmente com o texto OCR como contexto auxiliar.
-* **extrair_de_texto** — usa o modelo leve baseado apenas em texto
-  (``OLLAMA_TEXT_MODEL``, padrão ``qwen3:4b``) para extrair dados a
-  partir do texto devolvido pelo OCR. Esta rota é a recomendada quando
-  o OCR já forneceu um texto de boa qualidade.
-
-Ambos os fluxos usam o mesmo ``SYSTEM_PROMPT`` e o parser retrocompatível
-definido em :mod:`src.infrastructure.ai.response_parser`.
+Usa ``OLLAMA_MODEL`` (padrão ``llama3.2:1b``) apenas para **confirmar**
+se o texto OCR é um comprovante válido. A extração de valor, data e
+favorecido é feita via expressões regulares no próprio Python, já que
+o modelo 1B é pequeno demais para gerar JSON estruturado confiável.
 
 Regras inegociáveis (LGPD):
 
 * A IA **NUNCA** recebe nome, CPF, telefone, e-mail ou qualquer dado que
   identifique pessoas. A identificação do membro é feita exclusivamente
   pelo telefone via :class:`IdentificacaoService`.
-* A IA devolve **apenas** os campos estruturados do comprovante.
+* A IA devolve **apenas** confirmação se é comprovante ou não.
 """
 from __future__ import annotations
 
-import base64
 import logging
+import re
+from datetime import date
 from decimal import Decimal
-from pathlib import Path
 
 import httpx
-from pydantic import BaseModel, Field
 
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """
-Você é um classificador de comprovantes financeiros. Primeiro determine
-se a imagem contém UM COMPROVANTE PIX, TED, DOC, BOLETO ou transferência
-bancária. Se NÃO for um comprovante válido (ex: foto aleatória, selfie,
-paisagem, screenshot de conversa, documento pessoal, etc.), retorne:
-{"e_comprovante": false}
+# ── Extração via Regex ──────────────────────────────────────────────
 
-Se FOR um comprovante válido, extraia os dados e retorne SOMENTE um JSON
-válido, sem texto adicional, sem markdown, sem backticks.
-
-Extraia APENAS:
-- e_comprovante: true
-- valor: número decimal positivo (ex: 150.00)
-- data_pix: string ISO 8601 (ex: "2026-06-05")
-- favorecido: nome de quem RECEBE o PIX, ou null se não identificado
-- tipo_documento: "PIX" | "TED" | "DOC" | "BOLETO" | "OUTRO"
-- confidence: float de 0.0 a 1.0 indicando certeza da extração
-
-NÃO infira, NÃO crie, NÃO retorne: nome do pagador, CPF, telefone,
-e-mail ou qualquer dado que identifique pessoas.
-
-Formato de retorno OBRIGATÓRIO (somente este JSON, nada mais):
-Se NÃO for comprovante: {"e_comprovante": false}
-Se FOR comprovante: {"e_comprovante": true, "valor": 0.00,
- "data_pix": "YYYY-MM-DD", "favorecido": "string|null",
- "tipo_documento": "PIX|TED|DOC|BOLETO|OUTRO", "confidence": 0.00}
-""".strip()
+_PADROES_VALOR = [
+    re.compile(r"R\$\s*([\d\s,.]+)"),
+    re.compile(r"VALOR[:\s]*R?\$?\s*([\d\s,.]+)", re.IGNORECASE),
+]
+_PADROES_DATA_BR = re.compile(
+    r"(\d{2})[/\-](\d{2})[/\-](\d{4})"
+)
 
 
-# Tipos de documento aceitos
-TIPOS_DOCUMENTO_VALIDOS = ("PIX", "TED", "DOC", "BOLETO", "OUTRO")
+def extrair_valor(texto: str) -> Decimal | None:
+    """Extrai o primeiro valor monetário do texto OCR."""
+    for padrao in _PADROES_VALOR:
+        match = padrao.search(texto)
+        if match:
+            raw = match.group(1).strip()
+            # Remove separadores de milhar, mantém vírgula decimal
+            if "," in raw and raw.rindex(",") > raw.rfind("."):
+                raw = raw.replace(".", "").replace(",", ".")
+            else:
+                # Formato americano 1,234.56 ou já com ponto
+                raw = raw.replace(",", "")
+            raw = raw.replace(" ", "")
+            try:
+                valor = Decimal(raw)
+                if 0 < valor < 1_000_000:
+                    return valor
+            except Exception:
+                continue
+    return None
 
 
-class DadosComprovanteSchema(BaseModel):
-    """Schema novo (v2) do JSON devolvido pela IA.
+def extrair_data(texto: str) -> date | None:
+    """Extrai a primeira data no formato dd/mm/aaaa."""
+    match = _PADROES_DATA_BR.search(texto)
+    if match:
+        try:
+            dia, mes, ano = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return date(ano, mes, dia)
+        except (ValueError, OverflowError):
+            pass
+    return None
 
-    Substitui o schema antigo (``data``/``hora``/``banco``/``confianca``)
-    por um conjunto mais explícito e semanticamente correto.
+
+def extrair_favorecido(texto: str) -> str | None:
+    """Tenta extrair o nome do favorecido/destinatário após 'para' ou 'favorecido'."""
+    padroes = [
+        re.compile(r"(?:para|favorecido[:\s]*)\s*([A-ZÀ-Ú][A-ZÀ-Úa-zà-ú\s]+?)(?:\s+(?:Itaú|Banco|Bradesco|Caixa|Santander|Nubank|ag[êe]ncia|conta|CPF|CNPJ|$))", re.IGNORECASE),
+    ]
+    for padrao in padroes:
+        match = padrao.search(texto)
+        if match:
+            nome = match.group(1).strip()
+            if len(nome) > 3:
+                return nome
+    return None
+
+
+def extrair_dados_por_regex(texto: str) -> dict:
+    """Extrai valor, data e favorecido via regex.
+
+    Returns:
+        Dicionário com ``valor``, ``data_pagamento``, ``favorecido``
+        e ``confidence`` baseada na quantidade de campos extraídos.
     """
+    dados: dict = {"valor": None, "data_pagamento": None, "favorecido": None}
 
-    valor: Decimal = Field(gt=0)
-    data_pix: str  # ISO 8601 (validação final fica no parser)
-    favorecido: str | None = Field(None, max_length=200)
-    tipo_documento: str = "PIX"
-    confidence: float = Field(ge=0.0, le=1.0)
+    valor = extrair_valor(texto)
+    if valor:
+        dados["valor"] = valor
+
+    data = extrair_data(texto)
+    if data:
+        dados["data_pagamento"] = data
+
+    favorecido = extrair_favorecido(texto)
+    if favorecido:
+        dados["favorecido"] = favorecido
+
+    # Confidence baseada em quantos campos foram extraídos
+    campos = sum(1 for v in dados.values() if v is not None)
+    dados["confidence"] = round(campos / 3, 2)
+
+    return dados
+
+
+# ── Prompt ultra-simplificado para modelo 1B ──────────────────────────
+
+SYSTEM_PROMPT = (
+    "Você é um classificador. Responda apenas 'sim' se o texto for "
+    "um comprovante de pagamento/PIX, ou 'nao' caso contrário."
+)
+
+
+async def _chamar_ollama(model: str, texto_ocr: str) -> str | None:
+    """Chama o Ollama e retorna o texto cru da resposta."""
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Texto: {texto_ocr}\n"
+                "Responda apenas 'sim' ou 'nao'."
+            ),
+        },
+    ]
+    settings = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{settings.ollama_base_url}/api/chat",
+                json={"model": model, "messages": messages, "stream": False},
+            )
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "").strip().lower()
+    except Exception as exc:
+        logger.warning("Falha ao chamar Ollama (%s): %s", model, exc)
+        return None
 
 
 class OllamaService:
+    """Serviço de classificação de comprovantes via Ollama.
+
+    O modelo 1B classifica se o texto OCR é comprovante (sim/nao).
+    Os dados estruturados (valor, data, favorecido) são extraídos via
+    regex no método :meth:`extrair_dados`.
+    """
+
     def __init__(self) -> None:
         self._settings = get_settings()
 
-    async def extrair_de_imagem(
-        self, caminho: str, texto_ocr: str = ""
-    ) -> DadosComprovanteSchema | None:
-        """Extrai dados diretamente da imagem via modelo multimodal."""
-        path = Path(caminho)
-        if not path.exists():
-            return None
-        image_b64 = base64.b64encode(path.read_bytes()).decode()
-        prompt = f"Texto OCR auxiliar:\n{texto_ocr}\n\nAnalise o comprovante."
-        return await self._chamar_modelo(
-            self._settings.ollama_model, prompt, image_b64
-        )
+    async def classificar(self, texto_ocr: str) -> bool:
+        """Classifica se o texto OCR é um comprovante válido.
 
-    async def extrair_de_texto(self, texto_ocr: str) -> DadosComprovanteSchema | None:
-        """Extrai dados a partir do texto OCR via modelo leve (Qwen3:4b).
-
-        Esta é a rota preferencial após OCR. Usa ``OLLAMA_TEXT_MODEL``
-        (padrão ``qwen3:4b``), mais leve e rápido, e cai para
-        ``OLLAMA_FALLBACK_MODEL`` se o resultado for inválido.
+        Usa o modelo ``llama3.2:1b``. Em caso de falha ou resposta
+        ambígua, retorna ``True`` (assume que é comprovante, já que
+        o classificador por palavras-chave já aprovou antes).
         """
-        # Caminho primário: modelo leve (qwen3:4b)
-        resultado = await self._chamar_modelo(
-            self._settings.ollama_text_model,
-            f"Extraia dados do comprovante PIX:\n{texto_ocr}",
-            None,
-        )
-        if resultado is not None:
-            return resultado
+        resultado = await _chamar_ollama(self._settings.ollama_text_model, texto_ocr)
+        if resultado is None:
+            logger.info("Ollama falhou; assumindo comprovante válido")
+            return True
+        if "sim" in resultado:
+            return True
+        if "nao" in resultado:
+            logger.info("Ollama classificou como NÃO comprovante")
+            return False
+        logger.info("Resposta ambígua (%r); assumindo comprovante", resultado)
+        return True
 
-        # Fallback: modelo de texto maior (qwen2.5:7b)
-        logger.info("Qwen3 falhou; tentando fallback %s", self._settings.ollama_fallback_model)
-        return await self._chamar_modelo(
-            self._settings.ollama_fallback_model,
-            f"Extraia dados do comprovante PIX:\n{texto_ocr}",
-            None,
-        )
+    async def extrair_dados(self, texto_ocr: str) -> dict | None:
+        """Extrai dados do comprovante via regex.
 
-    async def _chamar_modelo(
-        self, model: str, prompt: str, image_b64: str | None
-    ) -> DadosComprovanteSchema | None:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        user_content: dict = {"role": "user", "content": prompt}
-        if image_b64:
-            user_content["images"] = [image_b64]
-        messages.append(user_content)
-
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(
-                    f"{self._settings.ollama_base_url}/api/chat",
-                    json={"model": model, "messages": messages, "stream": False},
-                )
-                resp.raise_for_status()
-                content = resp.json().get("message", {}).get("content", "")
-        except Exception as exc:
-            logger.warning("Falha ao chamar Ollama (%s): %s", model, exc)
+        Returns:
+            Dict com ``valor`` (Decimal), ``data_pagamento`` (date),
+            ``favorecido`` (str|None) e ``confidence`` (float),
+            ou ``None`` se não conseguir extrair ao menos o valor.
+        """
+        dados = extrair_dados_por_regex(texto_ocr)
+        if dados["valor"] is None:
+            logger.info("Não foi possível extrair valor do texto OCR")
             return None
-
-        from src.infrastructure.ai.response_parser import parse_dados_comprovante
-
-        return parse_dados_comprovante(content)
+        return dados

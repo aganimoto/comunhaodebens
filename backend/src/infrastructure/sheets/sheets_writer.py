@@ -1,16 +1,13 @@
-"""Escrita no Google Sheets (com fallback local JSON quando indisponível).
+"""Escrita no Google Sheets.
 
-A partir da Fase 5 do projeto de evolução:
+A partir da Fase 5, o método principal é ``append_doacao`` que grava
+na aba ``Doações`` com a estrutura otimizada para o novo fluxo de
+extração via regex.
 
-* ``append_doacao`` é o método canônico para novos lançamentos. Grava
-  na aba ``Doações``, sincronizando tanto ``CONFIRMADO`` quanto
-  ``PENDENTE`` (visão operacional completa, com coluna Status).
-* ``append_registro`` é mantido como alias retrocompatível (ainda grava
-  na aba ``Registros``) — o código legado que consulta essa aba não
-  quebra, mas nenhum dado novo é mais escrito nela.
-* ``append_auditoria`` agora aceita ``detalhes_dict`` opcional, que é
-  serializado como JSON no campo ``Detalhes``. Permite registrar o JSON
-  completo da IA junto com o evento de ``OCR_CONCLUIDO``.
+Métodos legados:
+- ``append_registro`` — mantido para retrocompatibilidade (aba Registros)
+- ``append_pendencia`` — grava na aba Pendências
+- ``append_auditoria`` — grava na aba Auditoria
 """
 from __future__ import annotations
 
@@ -24,7 +21,6 @@ from src.infrastructure.sheets.sheets_client import SheetsClient
 
 logger = logging.getLogger(__name__)
 
-# Limite de caracteres do OCR Bruto exibido na planilha (auditoria)
 _OCR_PREVIEW_MAX_CHARS = 100
 
 
@@ -37,23 +33,20 @@ class SheetsWriter:
         self,
         protocolo: str,
         data_pagamento: date,
-        hora: time | None,
         nome: str,
         categoria: str,
         valor: Decimal,
         favorecido: str | None,
-        tipo_documento: str | None,
         telefone: str,
         status: str,
         confianca: float,
         ocr_bruto_preview: str | None = None,
     ) -> None:
-        """Adiciona uma linha na aba ``Doações`` (CONFIRMADO ou PENDENTE).
+        """Adiciona uma linha na aba ``Doações``.
 
-        Colunas: Protocolo, Data, Hora, Nome, Categoria, Valor,
-        Favorecido, Tipo Documento, Telefone, Status, Confiança, OCR Bruto.
+        Colunas: Protocolo, Data, Nome, Categoria, Valor,
+        Favorecido, Telefone, Status, Confiança, OCR Preview.
         """
-        hora_str = hora.strftime("%H:%M") if hora else ""
         ocr_preview = ""
         if ocr_bruto_preview:
             ocr_preview = ocr_bruto_preview.replace("\n", " ").strip()[:_OCR_PREVIEW_MAX_CHARS]
@@ -62,12 +55,10 @@ class SheetsWriter:
             [
                 protocolo,
                 data_pagamento.isoformat(),
-                hora_str,
                 nome,
                 categoria,
                 f"{valor:.2f}",
                 favorecido or "",
-                tipo_documento or "",
                 telefone,
                 status,
                 f"{confianca * 100:.0f}%",
@@ -75,38 +66,27 @@ class SheetsWriter:
             ],
         )
 
-    # ── Registros (legacy, retrocompatível) ─────────────────────────────
+    # ── Registros (legacy) ─────────────────────────────────────────────
     def append_registro(
         self,
         protocolo: str,
         data_pagamento: date,
-        hora: time | None,
         nome: str,
         categoria: str,
         valor: Decimal,
-        banco: str | None,
         telefone: str,
         status: str,
         confianca: float,
     ) -> None:
-        """Alias retrocompatível — grava na aba legada ``Registros``.
-
-        A partir da Fase 5, novos lançamentos devem usar
-        :meth:`append_doacao`. Este método é mantido para que código
-        legado (ou integrações externas que ainda consultam ``Registros``)
-        não quebre.
-        """
-        hora_str = hora.strftime("%H:%M") if hora else ""
+        """Alias retrocompatível — grava na aba legada ``Registros``."""
         self._client.append_row(
             "Registros",
             [
                 protocolo,
                 data_pagamento.isoformat(),
-                hora_str,
                 nome,
                 categoria,
                 f"{valor:.2f}",
-                banco or "",
                 telefone,
                 status,
                 f"{confianca * 100:.0f}%",
@@ -129,7 +109,6 @@ class SheetsWriter:
 
         tz = ZoneInfo(get_settings().app_timezone)
         now = datetime.now(tz)
-        # Planilha: ID, Data, Telefone, Nome, Motivo, Status, Observação
         self._client.append_row(
             "Pendências",
             [
@@ -143,7 +122,7 @@ class SheetsWriter:
             ],
         )
 
-    # ── Auditoria (com JSON opcional da IA) ─────────────────────────────
+    # ── Auditoria ───────────────────────────────────────────────────────
     def append_auditoria(
         self,
         evento: str,
@@ -152,13 +131,6 @@ class SheetsWriter:
         telefone: str | None = None,
         detalhes_dict: dict | None = None,
     ) -> None:
-        """Adiciona linha na aba ``Auditoria``.
-
-        Aceita ``detalhes_dict`` opcional: quando presente, o dicionário
-        é serializado como JSON e anexado à string de detalhes. Use
-        para gravar o JSON bruto da IA junto com o evento
-        ``OCR_CONCLUIDO``.
-        """
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
@@ -173,7 +145,7 @@ class SheetsWriter:
             detalhes_completo = f"[contribuição {contribuicao_id}] {detalhes_completo}"
         if detalhes_dict:
             detalhes_completo = (
-                f"{detalhes_completo} | IA: {json.dumps(detalhes_dict, ensure_ascii=False, default=str)}"
+                f"{detalhes_completo} | Dados: {json.dumps(detalhes_dict, ensure_ascii=False, default=str)}"
             )
 
         self._client.append_row(

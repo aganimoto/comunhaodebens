@@ -1,226 +1,176 @@
-# Operação — CDB Shalom
+# CDB Shalom — Operação
 
-Guia para a equipe financeira e administradores do sistema.
+Guia de operação do sistema CDB Shalom.
 
-## Visão geral
+---
 
-O sistema recebe comprovantes de PIX enviados pelo WhatsApp, identifica o
-contribuinte pelo número de telefone cadastrado na aba **Membros** do
-Google Sheets, extrai valor/data/banco via IA, registra no banco e
-replica na planilha.
+## 1. Iniciar o sistema
 
-## Papéis (perfis)
+### Desenvolvimento (Windows)
 
-| Perfil | Pode ver | Pode editar |
-|--------|----------|-------------|
-| `administrador` | tudo | tudo (incluindo admin) |
-| `financeiro` | tudo | contribuições, pendências, relatórios |
-| `consulta` | tudo | nada |
-
-Crie usuários com:
-
-```bash
-docker compose exec backend python scripts/create_admin.py \
-    --email novo@cdbshalom.org --senha 'SenhaForte123!' --perfil financeiro
-```
-
-## Tarefas diárias automáticas
-
-| Horário (BR) | Tarefa | Local |
-|--------------|--------|-------|
-| 02:00 | `backup_diario` (pg_dump) | `/shared/backups/backup_YYYYMMDD_HHMMSS.dump` |
-| 06:00 (dia 1º) | `gerar_relatorio_mensal` | `/shared/relatorios/relatorio_YYYY-MM.pdf` |
-
-Verifique a saúde do Beat com:
-
-```bash
-docker compose logs celery-beat
-docker compose exec celery-worker celery -A src.tasks.celery_app inspect ping
-```
-
-## Relatórios PDF
-
-### Onde ficam
-
-- **Produção:** `/shared/relatorios/relatorio_YYYY-MM.pdf`
-- **Dev:** `backend/dev_data/relatorios/relatorio_YYYY-MM.pdf`
-
-### Como gerar manualmente
-
-1. Acesse o painel → **Relatórios PDF**
-2. Clique em **Gerar manualmente**
-3. Selecione mês/ano e confirme
-
-ou via API:
-
-```bash
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-    -H "Content-Type: application/json" \
-    -d '{"email":"admin@cdbshalom.local","senha":"TroqueEstaSenha123!"}' \
-    | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-
-curl -X POST http://localhost:8000/api/v1/relatorios/gerar-sync \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"ano":2026,"mes":5}'
-```
-
-O PDF contém:
-- Total arrecadado
-- Quantidade de contribuições
-- Top categorias
-- Top membros
-- Tabela detalhada de lançamentos
-
-## Backups
-
-### Onde ficam
-
-- **Produção:** `/shared/backups/`
-- **Dev:** `backend/dev_data/backups/`
-
-### Política de retenção
-
-Mantém os **últimos 30 backups** (configurável via `BACKUP_KEEP`).
-
-### Restore
-
-```bash
-# 1. Localize o backup desejado
-ls -lh /shared/backups/
-
-# 2. Copie para um local temporário
-cp /shared/backups/backup_20260601_020000.dump /tmp/restore.dump
-
-# 3. Restaure no Postgres (cuidado: sobrescreve o banco!)
-docker compose exec -T postgres pg_restore \
-    -U cdb_user -d cdb_shalom --clean --if-exists \
-    < /tmp/restore.dump
-```
-
-### Disparo manual
-
-```bash
-TOKEN=...
-
-curl -X POST http://localhost:8000/api/v1/admin/backup/run \
-    -H "Authorization: Bearer $TOKEN"
-```
-
-## Pendências
-
-A aba **Pendências** da planilha e a rota `/api/v1/pendencias` expõem
-todas as situações que exigem ação manual:
-
-| Motivo | Significado | Ação sugerida |
-|--------|-------------|---------------|
-| `telefone_nao_cadastrado` | Membro novo / mudou de número | Cadastrar na aba Membros |
-| `ocr_baixa_confianca` | OCR com confiança < limiar | Verificar imagem original |
-| `ia_baixa_confianca` | IA com confiança < limiar | Conferir valor/data/banco |
-| `comprovante_duplicado` | Mesmo hash já processado | Avisar o membro |
-| `valor_nao_identificado` | IA não extraiu valor | Pedir novo comprovante |
-| `erro_processamento` | Falha técnica | Reenviar |
-
-Para resolver via painel: clique em **Resolver** na linha correspondente.
-A descrição é registrada automaticamente como `observacao`.
-
-## Modo DEV (para a equipe)
-
-Se você só quer testar o painel sem configurar Sheets/WhatsApp/Ollama:
-
-```bash
-# 1. Suba o stack com perfil dev
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-
-# 2. Popular dados de exemplo
-docker compose exec backend python scripts/seed_dev_data.py
-
-# 3. Acesse o painel
-# http://localhost:5173
-# login: admin@cdbshalom.local / TroqueEstaSenha123!
-```
-
-Em modo dev:
-- Planilha Sheets é substituída por arquivo JSON em `dev_data/sheets.json`
-- Respostas da IA são determinísticas (mesmo input → mesmo output)
-- Mensagens WhatsApp saem gravadas em `dev_data/whatsapp_outbox.json`
-- Backups viram placeholders (sem `pg_dump` real)
-- Relatórios PDF vão para `dev_data/relatorios/`
-
-## Engine de OCR (PaddleOCR / Tesseract)
-
-A partir da versão atual, o backend aceita **duas engines de OCR** para
-processar comprovantes PIX. A escolha é feita por configuração, sem
-necessidade de alterar código.
-
-| Variável | Valores | Padrão | Observação |
-|---|---|---|---|
-| `OCR_ENGINE` | `paddle` \| `tesseract` | `paddle` | Engine padrão. PaddleOCR PT-BR é mais robusto; Tesseract é mais leve. |
-| `TESSERACT_CMD` | caminho absoluto | (vazio) | Se vazio, usa o `tesseract` do `PATH`. |
-| `TESSERACT_LANG` | códigos Tesseract | `por` | Ex.: `por+eng`. |
-
-### Instalação do Tesseract (opcional)
-
-**Windows:**
 ```cmd
-choco install tesseract
-# ou baixe o instalador em https://github.com/UB-Mannheim/tesseract/wiki
+scripts\windows\dev-all.bat
 ```
 
-**Linux (Debian/Ubuntu):**
-```bash
-sudo apt-get update
-sudo apt-get install -y tesseract-ocr tesseract-ocr-por
+Ou manualmente em 3 terminais:
+
+```cmd
+# Terminal 1: Backend
+cd backend
+.venv\Scripts\activate
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: WhatsApp Service
+cd whatsapp-service
+npm start
+
+# Terminal 3: Frontend
+cd frontend
+npm run dev
 ```
 
-**macOS:**
-```bash
-brew install tesseract tesseract-lang
-```
-
-Em seguida instale o binding Python:
-```bash
-pip install -e ".[ocr-tesseract]"
-```
-
-### Quando usar cada engine
-
-- **PaddleOCR** (padrão): recomendado para produção quando há recursos
-  de CPU/GPU disponíveis. Melhor acurácia em textos mistos e baixos.
-- **Tesseract**: recomendado em ambientes leves (containers pequenos,
-  Raspberry Pi, CI). Acurácia um pouco menor; manter o pré-processamento
-  OpenCV (`preprocess_image`) ajuda bastante.
-
-A troca é feita reiniciando o backend após alterar `OCR_ENGINE` no `.env`.
-
-## Modelos Ollama
-
-A extração de dados do comprovante usa modelos locais Ollama.
-O sistema já vem configurado para usar `qwen2.5-vl:7b` (multimodal) como
-modelo principal e `qwen2.5:7b` como fallback de texto. A partir desta
-versão há também o modelo **Qwen3:4b** para extração baseada apenas em
-texto (após OCR), que é mais leve e rápido.
-
-| Variável | Modelo | Uso |
-|---|---|---|
-| `OLLAMA_MODEL` | `qwen2.5-vl:7b` | Visão (imagem + texto) |
-| `OLLAMA_FALLBACK_MODEL` | `qwen2.5:7b` | Texto (fallback) |
-| `OLLAMA_TEXT_MODEL` | `qwen3:4b` | Texto (recomendado após OCR) |
-
-Para baixar o `qwen3:4b` no Ollama:
-```bash
-docker compose exec ollama ollama pull qwen3:4b
-```
-
-## Limpar dados de dev
+### Produção (Docker)
 
 ```bash
-rm -rf backend/dev_data
-docker compose -f docker-compose.yml -f docker-compose.dev.yml restart backend
+docker compose -f infra/docker/docker-compose.yml up -d --build
 ```
 
-## Contatos
+---
 
-- **Administrador do sistema:** <admin@cdbshalom.org>
-- **Equipe financeira:** <financeiro@cdbshalom.org>
-- **Plantão (emergências):** ver README principal
+## 2. Verificar status
+
+### Backend
+- Acesse http://localhost:8000/docs (Swagger)
+- Verifique se a API responde
+
+### Google Sheets
+- Acesse a planilha no navegador
+- Verifique se as abas existem: Membros, Doações, Registros, Pendências, Auditoria, Configuração
+
+### Ollama (opcional)
+```bash
+ollama list
+# Deve mostrar: llama3.2:1b
+```
+
+---
+
+## 3. Fluxo de processamento
+
+```
+1. Membro envia foto de comprovante via WhatsApp
+2. WhatsApp Service recebe e reencaminha para Backend
+3. Backend identifica membro pelo telefone (Sheets + cache Redis)
+4. Celery task dispara processamento OCR
+5. EasyOCR extrai texto bruto da imagem
+6. Classificador por palavras-chave valida se é comprovante
+7. Regex extrai: valor (R$), data (dd/mm/aaaa), favorecido
+8. Status determinado por confiança:
+   - >= 0.80: CONFIRMADO
+   - < 0.80: PENDENTE
+9. Dados salvos na aba Doações do Google Sheets
+10. Protocolo gerado (YYYYMMDD-HASH6)
+11. WhatsApp notifica o contribuinte
+```
+
+---
+
+## 4. Monitoramento
+
+### Logs
+- Logs do backend: terminal onde o uvicorn está rodando
+- Logs do WhatsApp Service: terminal onde o node está rodando
+- Logs do Celery: terminal onde o worker está rodando
+
+### Google Sheets
+- Aba **Auditoria**: eventos de processamento
+- Aba **Pendências**: erros e pendências
+- Aba **Doações**: todos os comprovantes processados
+
+### Debug Logger
+O sistema mantém um logger de debug em memória com hash do telefone (LGPD):
+- `MODULO_OCR` — etapas do OCR
+- `MODULO_IA` — etapas da IA/regex
+- `MODULO_CLASSIFICADOR` — classificação por palavras-chave
+
+---
+
+## 5. Manutenção
+
+### Limpar cache Redis
+```bash
+redis-cli FLUSHDB
+```
+
+### Resetar planilha
+- Use o script `scripts/seed_sheets.py` para recriar cabeçalhos
+- Ou recrie manualmente as abas no Google Sheets
+
+### Atualizar modelo Ollama
+```bash
+ollama pull llama3.2:1b
+```
+
+### Backup
+- Google Sheets: Arquivo → Histórico de versões
+- Redis: `redis-cli BGSAVE`
+- Arquivos de mídia: `shared/media/`
+
+---
+
+## 6. Solução de problemas
+
+| Problema | Causa | Solução |
+|----------|-------|---------|
+| `ECONNREFUSED` no frontend | Backend não está rodando | Execute `run-backend.bat` ou `uvicorn` |
+| Google Sheets não conecta | Service account não configurada | Configure `GOOGLE_SERVICE_ACCOUNT_JSON` e `GOOGLE_SPREADSHEET_ID` |
+| `ModuleNotFoundError` | Dependências não instaladas | `pip install -e ".[dev]"` |
+| OCR não funciona | EasyOCR não instalado | Execute `python -c "import easyocr; easyocr.Reader(['pt'])"` |
+| `Porta já em uso` | Outro processo na mesma porta | Mude a porta ou mate o processo |
+| Celery não conecta | Redis não está rodando | Inicie Redis ou ignore se não usar tarefas assíncronas |
+| IA não responde | Ollama não está rodando | Inicie Ollama ou desabilite classificação |
+| Dados não aparecem na planilha | Service account sem permissão | Compartilhe a planilha com a service account |
+
+---
+
+## 7. Segurança
+
+### LGPD
+- O sistema **NUNCA** armazena CPF, nome completo ou telefone em logs
+- Logs usam hash: `SHA256(telefone)[:8]`
+- A IA **NUNCA** recebe dados pessoais
+
+### Autenticação
+- JWT com expiração de 8 horas
+- Perfis: `administrador`, `financeiro`, `consulta`
+- Senha padrão: `TroqueEstaSenha123!` (alterar em produção)
+
+### Webhook WhatsApp
+- Validação HMAC com `WHATSAPP_WEBHOOK_SECRET`
+- Mensagens são processadas de forma idempotente (hash SHA256)
+
+---
+
+## 8. Comandos úteis
+
+```bash
+# Verificar se o backend está rodando
+curl http://localhost:8000/docs
+
+# Verificar se o Ollama está rodando
+curl http://localhost:11434/api/tags
+
+# Verificar se o Redis está rodando
+redis-cli ping
+
+# Listar modelos Ollama
+ollama list
+
+# Baixar modelo
+ollama pull llama3.2:1b
+
+# Executar seed da planilha
+cd backend && python -m src.infrastructure.sheets.seed
+
+# Verificar logs do Celery
+docker compose logs celery-worker
