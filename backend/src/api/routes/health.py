@@ -1,10 +1,8 @@
 import httpx
 from fastapi import APIRouter
-from sqlalchemy import text
 
 from src.config import get_settings
 from src.infrastructure.cache.redis_client import get_redis
-from src.infrastructure.database.connection import engine
 from src.infrastructure.sheets.sheets_client import SheetsClient
 
 router = APIRouter(tags=["health"])
@@ -28,7 +26,7 @@ async def live():
 @router.get("/health/ready")
 async def ready():
     services = await _check_services()
-    critical = ["postgres", "redis"]
+    critical = ["redis"]
     if all(services.get(k, {}).get("status") == "ok" for k in critical):
         return {"status": "ok"}
     from fastapi.responses import JSONResponse
@@ -40,13 +38,7 @@ async def _check_services() -> dict:
     settings = get_settings()
     result = {}
 
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        result["postgres"] = {"status": "ok"}
-    except Exception as e:
-        result["postgres"] = {"status": "down", "error": str(e)}
-
+    # Redis
     try:
         r = get_redis()
         await r.ping()
@@ -54,6 +46,7 @@ async def _check_services() -> dict:
     except Exception as e:
         result["redis"] = {"status": "down", "error": str(e)}
 
+    # Ollama (opcional)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{settings.ollama_base_url}/api/tags")
@@ -61,11 +54,13 @@ async def _check_services() -> dict:
     except Exception as e:
         result["ollama"] = {"status": "down", "error": str(e)}
 
+    # Google Sheets
     sheets = SheetsClient()
     result["google_sheets"] = {
         "status": "ok" if sheets.available else "degraded",
     }
 
+    # WhatsApp Service
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{settings.whatsapp_service_url}/health")

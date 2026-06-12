@@ -1,29 +1,17 @@
-"""Endpoints administrativos (cache, dashboard, backup, restore) — Fase 6 expande o dashboard."""
+"""Endpoints administrativos (cache, dashboard) — dados do Google Sheets."""
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
-from typing import Any
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.middleware.auth import Perfil, require_perfil
-from src.config import get_settings
 from src.infrastructure.cache.redis_client import cache_delete_pattern
-from src.infrastructure.database.connection import get_db_session
-from src.infrastructure.database.models import (
-    ContribuicaoModel,
-    MembroModel,
-    PendenciaModel,
-)
+from src.infrastructure.sheets.sheets_client import SheetsClient
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-# ── Cache ──────────────────────────────────────────────────────────────
+# ── Cache ──
 @router.post("/cache/flush")
 async def flush_cache(
     _user=Depends(require_perfil(Perfil.ADMINISTRADOR)),
@@ -33,200 +21,122 @@ async def flush_cache(
     return {"deleted_keys": deleted}
 
 
-# ── Dashboard (Fase 6: expandido) ──────────────────────────────────────
+# ── Dashboard ──
 class ContribuicaoResumo(BaseModel):
-    id: str
     protocolo: str
-    telefone: str
-    valor: float
-    data_pagamento: str
+    data: str
+    nome: str
+    valor: str
     status: str
-    confianca: float
-
-
-class PendenciaResumo(BaseModel):
-    id: str
-    telefone: str | None
-    motivo: str
-    status: str
-    contribuicao_id: str | None
-    criado_em: str | None
+    confianca: str
 
 
 class DashboardStats(BaseModel):
-    # Métricas originais
     total_contribuicoes: int
     contribuicoes_confirmadas: int
-    contribuicoes_revisao: int  # alias de PENDENTE (retrocompat UI)
-    contribuicoes_pendentes: int  # novo
-    contribuicoes_processando: int
+    contribuicoes_pendentes: int
     pendencias_abertas: int
     valor_total_confirmado: float
-    # Métricas novas (Fase 6)
     valor_hoje: float
     valor_mes: float
     ultimas_contribuicoes: list[ContribuicaoResumo]
-    pendencias_ocr: list[PendenciaResumo]
-    # Hash das imagens em processamento (para barra de progresso SSE)
-    processando_hashes: list[str] = []
 
 
-def _to_resumo_contrib(c: ContribuicaoModel) -> ContribuicaoResumo:
-    return ContribuicaoResumo(
-        id=str(c.id),
-        protocolo=c.protocolo,
-        telefone=c.telefone,
-        valor=float(c.valor),
-        data_pagamento=c.data_pagamento.isoformat() if c.data_pagamento else "",
-        status=c.status,
-        confianca=float(c.confianca) if c.confianca is not None else 0.0,
-    )
+def _ler_doacoes(client: SheetsClient) -> list[list[str]]:
+    rows = client.get_values("Doações!A1:J5000")
+    if not rows or len(rows) < 2:
+        return []
+    return rows[1:]  # Pular cabeçalho
 
 
-def _to_resumo_pendencia(p: PendenciaModel) -> PendenciaResumo:
-    return PendenciaResumo(
-        id=str(p.id),
-        telefone=p.telefone,
-        motivo=p.motivo,
-        status=p.status,
-        contribuicao_id=str(p.contribuicao_id) if p.contribuicao_id else None,
-        criado_em=p.criado_em.isoformat() if p.criado_em else None,
-    )
+def _ler_pendencias(client: SheetsClient) -> list[list[str]]:
+    rows = client.get_values("Pendências!A1:G5000")
+    if not rows or len(rows) < 2:
+        return []
+    return rows[1:]
 
 
-@router.get("/dashboard/stats", response_model=DashboardStats)
+@router.get("/dashboard/stats")
 async def dashboard_stats(
-    session: AsyncSession = Depends(get_db_session),
     _user=Depends(require_perfil(Perfil.ADMINISTRADOR, Perfil.FINANCEIRO, Perfil.CONSULTA)),
 ):
-    """Estatísticas expandidas do dashboard (Fase 6).
+    client = SheetsClient()
+    if not client.available:
+        raise HTTPException(503, "Google Sheets indisponível")
 
-    Inclui totais clássicos + ``valor_hoje``, ``valor_mes``,
-    ``ultimas_contribuicoes`` e ``pendencias_ocr`` (pendências que
-    representam falhas de OCR/IA — sobre as quais o botão
-    "Reprocessar" do painel atua).
-    """
-    # Métricas clássicas
-    total = (await session.execute(select(func.count()).select_from(ContribuicaoModel))).scalar() or 0
-    confirmadas = (
-        await session.execute(
-            select(func.count()).select_from(ContribuicaoModel).where(
-                ContribuicaoModel.status == "confirmado"
-            )
-        )
-    ).scalar() or 0
-    # "em revisão" é o alias antigo — mantido para retrocompat da UI
-    revisao = (
-        await session.execute(
-            select(func.count()).select_from(ContribuicaoModel).where(
-                ContribuicaoModel.status == "revisao"
-            )
-        )
-    ).scalar() or 0
-    # PENDENTE é o status novo
-    pendentes = (
-        await session.execute(
-            select(func.count()).select_from(ContribuicaoModel).where(
-                ContribuicaoModel.status == "pendente"
-            )
-        )
-    ).scalar() or 0
-    processando = (
-        await session.execute(
-            select(func.count()).select_from(ContribuicaoModel).where(
-                ContribuicaoModel.status == "processando"
-            )
-        )
-    ).scalar() or 0
-    pendencias_abertas = (
-        await session.execute(
-            select(func.count()).select_from(PendenciaModel).where(
-                PendenciaModel.status == "aberto"
-            )
-        )
-    ).scalar() or 0
-    valor_total_confirmado = (
-        await session.execute(
-            select(func.coalesce(func.sum(ContribuicaoModel.valor), 0)).where(
-                ContribuicaoModel.status == "confirmado"
-            )
-        )
-    ).scalar() or 0
+    doacoes = _ler_doacoes(client)
+    pendencias = _ler_pendencias(client)
 
-    # Métricas novas
-    settings = get_settings()
-    tz = timezone(timedelta(hours=-3))  # America/Sao_Paulo fixo
-    agora = datetime.now(tz)
-    hoje = agora.date()
-    mes_inicio = hoje.replace(day=1)
+    total = len(doacoes)
+    confirmadas = 0
+    pendentes = 0
+    valor_total = 0.0
 
-    valor_hoje = (
-        await session.execute(
-            select(func.coalesce(func.sum(ContribuicaoModel.valor), 0)).where(
-                ContribuicaoModel.status == "confirmado",
-                ContribuicaoModel.data_pagamento == hoje,
-            )
-        )
-    ).scalar() or 0
+    ultimas = []
+    for row in reversed(doacoes[-20:]):  # Últimas 20
+        if len(row) < 9:
+            continue
+        status = row[7].strip().upper()
+        if status == "CONFIRMADO":
+            confirmadas += 1
+            try:
+                valor_total += float(row[4].replace("R$", "").replace(" ", "").replace(",", "."))
+            except (ValueError, IndexError):
+                pass
+        elif status == "PENDENTE":
+            pendentes += 1
+        ultimas.append(ContribuicaoResumo(
+            protocolo=row[0],
+            data=row[1],
+            nome=row[2],
+            valor=row[4],
+            status=status,
+            confianca=row[8],
+        ))
 
-    valor_mes = (
-        await session.execute(
-            select(func.coalesce(func.sum(ContribuicaoModel.valor), 0)).where(
-                ContribuicaoModel.status == "confirmado",
-                ContribuicaoModel.data_pagamento >= mes_inicio,
-            )
-        )
-    ).scalar() or 0
+    pendencias_abertas = sum(1 for p in pendencias if len(p) >= 6 and p[5].strip().lower() == "aberto")
 
-    # Últimas 5 contribuições
-    q_ultimas = await session.execute(
-        select(ContribuicaoModel)
-        .order_by(desc(ContribuicaoModel.criado_em))
-        .limit(5)
-    )
-    ultimas = [_to_resumo_contrib(c) for c in q_ultimas.scalars().all()]
+    # Valor hoje e mês
+    from datetime import date
+    hoje = date.today()
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+    valor_hoje = 0.0
+    valor_mes = 0.0
 
-    # Pendências que representam falhas OCR/IA (sobre as quais o botão
-    # "Reprocessar" do painel atua). Exclui pendências de
-    # telefone_nao_cadastrado e comprovante_duplicado (que não
-    # envolvem reprocessamento de imagem).
-    motivos_ocr = ("ocr_baixa_confianca", "ia_baixa_confianca", "erro_processamento")
-    q_pend_ocr = await session.execute(
-        select(PendenciaModel)
-        .where(
-            PendenciaModel.status == "aberto",
-            PendenciaModel.motivo.in_(motivos_ocr),
-        )
-        .order_by(desc(PendenciaModel.criado_em))
-        .limit(20)
-    )
-    pendencias_ocr = [_to_resumo_pendencia(p) for p in q_pend_ocr.scalars().all()]
-
-    # Buscar hashes das contribuições em processamento (para barra SSE)
-    q_hashes = await session.execute(
-        select(ContribuicaoModel.hash_imagem).where(
-            ContribuicaoModel.status == "processando"
-        )
-    )
-    processando_hashes = [row[0] for row in q_hashes.all() if row[0]]
+    for row in doacoes:
+        if len(row) < 8:
+            continue
+        status = row[7].strip().upper()
+        if status != "CONFIRMADO":
+            continue
+        try:
+            v = float(row[4].replace("R$", "").replace(" ", "").replace(",", "."))
+        except (ValueError, IndexError):
+            continue
+        try:
+            data_str = row[1].strip()
+            data = date.fromisoformat(data_str)
+            if data == hoje:
+                valor_hoje += v
+            if data.month == mes_atual and data.year == ano_atual:
+                valor_mes += v
+        except (ValueError, IndexError):
+            pass
 
     return DashboardStats(
-        processando_hashes=processando_hashes,
         total_contribuicoes=total,
         contribuicoes_confirmadas=confirmadas,
-        contribuicoes_revisao=revisao,
         contribuicoes_pendentes=pendentes,
-        contribuicoes_processando=processando,
         pendencias_abertas=pendencias_abertas,
-        valor_total_confirmado=float(valor_total_confirmado),
-        valor_hoje=float(valor_hoje),
-        valor_mes=float(valor_mes),
-        ultimas_contribuicoes=ultimas,
-        pendencias_ocr=pendencias_ocr,
+        valor_total_confirmado=round(valor_total, 2),
+        valor_hoje=round(valor_hoje, 2),
+        valor_mes=round(valor_mes, 2),
+        ultimas_contribuicoes=ultimas[-5:],
     )
 
 
-# ── Backup ─────────────────────────────────────────────────────────────
+# ── Backup ──
 class RestoreBody(BaseModel):
     backup_filename: str
     confirmar: bool
@@ -246,9 +156,7 @@ async def restore_backup(
 async def run_backup_now(
     _user=Depends(require_perfil(Perfil.ADMINISTRADOR)),
 ):
-    """Dispara o backup imediatamente (útil para teste)."""
     from src.tasks.backup_task import backup_diario
-
     async_result = backup_diario.delay()
     return {"status": "enqueued", "task_id": str(async_result.id)}
 
@@ -257,7 +165,5 @@ async def run_backup_now(
 async def list_backups(
     _user=Depends(require_perfil(Perfil.ADMINISTRADOR, Perfil.FINANCEIRO)),
 ):
-    """Lista os backups disponíveis."""
     from src.tasks.backup_task import listar_backups
-
     return listar_backups.apply().get()

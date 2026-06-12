@@ -13,8 +13,6 @@ from src.application.services.ocr_logger import (
 from src.application.use_cases.processar_comprovante import ProcessarComprovanteUseCase
 from src.config import get_settings
 from src.domain.events.novo_comprovante_recebido import NovoComprovanteRecebido
-from src.infrastructure.database.connection import get_db_session
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -40,7 +38,6 @@ def _verify_hmac(body: bytes, signature: str | None) -> None:
 @router.post("/whatsapp")
 async def whatsapp_webhook(
     request: Request,
-    session: AsyncSession = Depends(get_db_session),
     x_hmac_signature: str | None = Header(None, alias="X-HMAC-Signature"),
 ):
     body = await request.body()
@@ -71,7 +68,7 @@ async def whatsapp_webhook(
         caminho_arquivo=payload.caminho_arquivo,
         hash_sha256=payload.hash_sha256,
     )
-    uc = ProcessarComprovanteUseCase(session)
+    uc = ProcessarComprovanteUseCase()
     result = await uc.executar(evento)
     _debug.info(
         MODULO_WEBHOOK,

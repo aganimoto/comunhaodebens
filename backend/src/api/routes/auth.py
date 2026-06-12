@@ -1,15 +1,12 @@
+"""Autenticação JWT — usuário único definido via variáveis de ambiente."""
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from jose import jwt
 import bcrypt
 from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import get_settings
-from src.infrastructure.database.connection import get_db_session
-from src.infrastructure.database.models import UsuarioAdminModel
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -43,17 +40,21 @@ def _create_token(subject: str, perfil: str) -> str:
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, session: AsyncSession = Depends(get_db_session)):
-    q = await session.execute(
-        select(UsuarioAdminModel).where(
-            UsuarioAdminModel.email == body.email,
-            UsuarioAdminModel.ativo.is_(True),
-        )
-    )
-    user = q.scalar_one_or_none()
-    if not user or not _verificar_senha(body.senha, user.senha_hash):
+async def login(body: LoginRequest):
+    settings = get_settings()
+
+    # Usuário único definido nas configurações
+    if body.email != settings.bootstrap_admin_email:
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
-    return TokenResponse(access_token=_create_token(user.email, user.perfil))
+
+    # Verificar senha
+    admin_hash = _hash_senha(settings.bootstrap_admin_password)
+    if not _verificar_senha(body.senha, admin_hash):
+        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+
+    return TokenResponse(
+        access_token=_create_token(body.email, settings.bootstrap_admin_perfil)
+    )
 
 
 @router.post("/logout")
