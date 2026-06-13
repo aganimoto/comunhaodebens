@@ -54,32 +54,3 @@ async def download(relatorio_id: str, _user=Depends(get_current_user)):
     return FileResponse(path, media_type="application/pdf", filename=path.name)
 
 
-@router.post("/gerar", status_code=202)
-async def gerar_manual(
-    body: GerarBody | None = None,
-    _user=Depends(require_perfil(Perfil.ADMINISTRADOR, Perfil.FINANCEIRO)),
-):
-    """Enfileira a geração assíncrona de um relatório mensal."""
-    from src.tasks.relatorio_task import gerar_relatorio_mensal
-
-    payload = body or GerarBody()
-    async_result = gerar_relatorio_mensal.delay(payload.ano, payload.mes)
-    return {
-        "status": "enqueued",
-        "task_id": str(async_result.id),
-        "ano": payload.ano,
-        "mes": payload.mes,
-    }
-
-
-@router.post("/gerar-sync")
-async def gerar_sincrono(
-    body: GerarBody | None = None,
-    _user=Depends(require_perfil(Perfil.ADMINISTRADOR, Perfil.FINANCEIRO)),
-):
-    """Gera imediatamente (útil para testes e dev)."""
-    from src.tasks.relatorio_task import gerar_relatorio_mensal
-
-    payload = body or GerarBody()
-    result = gerar_relatorio_mensal.apply(args=[payload.ano, payload.mes]).get()
-    return result

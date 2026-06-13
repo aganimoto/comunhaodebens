@@ -59,8 +59,6 @@ class Settings(BaseSettings):
     # Caminho de saída de PDFs de relatório em dev (sem volume compartilhado)
     dev_relatorios_path: str = "./dev_data/relatorios"
     dev_backup_path: str = "./dev_data/backups"
-    # Database
-    database_url: str = "sqlite+aiosqlite:///dev.db"
 
     # Primeiro admin criado pelo script create_admin
     bootstrap_admin_email: str = "admin@cdbshalom.local"

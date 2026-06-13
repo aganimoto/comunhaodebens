@@ -136,34 +136,3 @@ async def dashboard_stats(
     )
 
 
-# ── Backup ──
-class RestoreBody(BaseModel):
-    backup_filename: str
-    confirmar: bool
-
-
-@router.post("/backup/restore")
-async def restore_backup(
-    body: RestoreBody,
-    _user=Depends(require_perfil(Perfil.ADMINISTRADOR)),
-):
-    if not body.confirmar:
-        raise HTTPException(400, "Confirmação obrigatória")
-    return {"status": "scheduled", "file": body.backup_filename}
-
-
-@router.post("/backup/run", status_code=202)
-async def run_backup_now(
-    _user=Depends(require_perfil(Perfil.ADMINISTRADOR)),
-):
-    from src.tasks.backup_task import backup_diario
-    async_result = backup_diario.delay()
-    return {"status": "enqueued", "task_id": str(async_result.id)}
-
-
-@router.get("/backup/list")
-async def list_backups(
-    _user=Depends(require_perfil(Perfil.ADMINISTRADOR, Perfil.FINANCEIRO)),
-):
-    from src.tasks.backup_task import listar_backups
-    return listar_backups.apply().get()
