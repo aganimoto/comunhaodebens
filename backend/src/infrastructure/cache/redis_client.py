@@ -31,7 +31,7 @@ async def cache_get(key: str) -> Any | None:
 
 async def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     r = get_redis()
-    await r.setex(key, ttl_seconds, json.dumps(value, default=str))
+    await r.set(key, json.dumps(value, default=str), ex=ttl_seconds)
 
 
 async def cache_delete_pattern(pattern: str) -> int:

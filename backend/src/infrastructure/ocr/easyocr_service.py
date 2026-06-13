@@ -20,20 +20,16 @@ import re
 from dataclasses import dataclass
 
 from src.application.services.debug_logger import MODULO_OCR, get_debug_logger
+from src.application.services.extracao_ocr import (
+    contar_palavras_chave,
+    extrair_data,
+    extrair_valor,
+)
 from time import perf_counter
 
 from .paddle_ocr_service import BlocoOCR, ResultadoOCR
 
 logger = logging.getLogger(__name__)
-
-# Palavras-chave para identificar comprovante
-_KEYWORDS_COMPROVANTE: set[str] = {
-    "pix", "ted", "doc", "comprovante", "transferencia", "transf",
-    "r$", "valor", "pago", "receb", "remetente", "favorecido",
-    "cpf", "cnpj", "instituicao", "conta", "agencia", "chave",
-    "pagamento", "enviado", "horario", "data", "transacao",
-    "banco", "nome", "documento",
-}
 
 
 @dataclass
@@ -113,56 +109,6 @@ def _ler_imagem_pillow(caminho: str):
         return None
 
 
-def _extrair_valor(texto: str) -> float | None:
-    """Tenta extrair valor monetario do texto OCR."""
-    padroes = [
-        r"R\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)",  # R$ 1.234,56
-        r"R\$\s*(\d+(?:,\d{2})?)",  # R$ 80,00
-    ]
-
-    for padrao in padroes:
-        matches = re.findall(padrao, texto)
-        for match in matches:
-            try:
-                valor_str = match.replace(".", "").replace(",", ".")
-                valor = float(valor_str)
-                if 0 < valor < 1000000:
-                    return valor
-            except (ValueError, TypeError):
-                continue
-
-    return None
-
-
-def _extrair_data(texto: str) -> str | None:
-    """Tenta extrair data do texto OCR no formato DD/MM/AAAA."""
-    padroes = [
-        r"(\d{2}/\d{2}/\d{4})",  # 12/08/2022
-        r"(\d{2}-\d{2}-\d{4})",  # 12-08-2022
-    ]
-
-    for padrao in padroes:
-        matches = re.findall(padrao, texto)
-        if matches:
-            return matches[0]
-
-    return None
-
-
-def _extrair_palavras_chave(texto: str) -> int:
-    """Conta quantas palavras-chave de comprovante aparecem no texto."""
-    texto_lower = texto.lower()
-    return sum(1 for kw in _KEYWORDS_COMPROVANTE if kw in texto_lower)
-
-
-def _eh_comprovante(texto: str, confianca: float) -> bool:
-    """Determina se o texto lido parece ser um comprovante."""
-    if not texto.strip():
-        return False
-    if confianca < 0.3:
-        return False
-    palavras = _extrair_palavras_chave(texto)
-    return palavras >= 3
 
 
 class EasyOCRService:

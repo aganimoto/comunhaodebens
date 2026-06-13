@@ -17,16 +17,12 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from src.api.sse_utils import sse_payload
 from src.application.services.ocr_logger import obter_logger
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ocr-progress", tags=["ocr-progress"])
-
-
-def _sse_payload(event: str, data: str) -> str:
-    """Formata uma mensagem SSE."""
-    return f"event: {event}\ndata: {data}\n\n"
 
 
 @router.get("/{identificador}")
@@ -46,17 +42,17 @@ async def stream_ocr_progress(identificador: str):
         while not ocr_logger.concluido:
             etapas = ocr_logger.get_etapas()
             for i in range(ultimo_enviado, len(etapas)):
-                yield _sse_payload("ocr-progresso", json.dumps(etapas[i], ensure_ascii=False))
+                yield sse_payload("ocr-progresso", json.dumps(etapas[i], ensure_ascii=False))
                 ultimo_enviado = i + 1
             await asyncio.sleep(0.5)
 
         # Enviar etapas restantes após conclusão
         etapas = ocr_logger.get_etapas()
         for i in range(ultimo_enviado, len(etapas)):
-            yield _sse_payload("ocr-progresso", json.dumps(etapas[i], ensure_ascii=False))
+            yield sse_payload("ocr-progresso", json.dumps(etapas[i], ensure_ascii=False))
 
         # Evento final
-        yield _sse_payload("ocr-concluido", json.dumps({"identificador": identificador}))
+        yield sse_payload("ocr-concluido", json.dumps({"identificador": identificador}))
 
     return StreamingResponse(
         event_generator(),

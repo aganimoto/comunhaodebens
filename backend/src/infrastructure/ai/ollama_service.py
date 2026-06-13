@@ -15,102 +15,13 @@ Regras inegociáveis (LGPD):
 from __future__ import annotations
 
 import logging
-import re
-from datetime import date
-from decimal import Decimal
 
 import httpx
 
+from src.application.services.extracao_ocr import extrair_data, extrair_valor
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-
-# ── Extração via Regex ──────────────────────────────────────────────
-
-_PADROES_VALOR = [
-    re.compile(r"R\$\s*([\d\s,.]+)"),
-    re.compile(r"VALOR[:\s]*R?\$?\s*([\d\s,.]+)", re.IGNORECASE),
-]
-_PADROES_DATA_BR = re.compile(
-    r"(\d{2})[/\-](\d{2})[/\-](\d{4})"
-)
-
-
-def extrair_valor(texto: str) -> Decimal | None:
-    """Extrai o primeiro valor monetário do texto OCR."""
-    for padrao in _PADROES_VALOR:
-        match = padrao.search(texto)
-        if match:
-            raw = match.group(1).strip()
-            # Remove separadores de milhar, mantém vírgula decimal
-            if "," in raw and raw.rindex(",") > raw.rfind("."):
-                raw = raw.replace(".", "").replace(",", ".")
-            else:
-                # Formato americano 1,234.56 ou já com ponto
-                raw = raw.replace(",", "")
-            raw = raw.replace(" ", "")
-            try:
-                valor = Decimal(raw)
-                if 0 < valor < 1_000_000:
-                    return valor
-            except Exception:
-                continue
-    return None
-
-
-def extrair_data(texto: str) -> date | None:
-    """Extrai a primeira data no formato dd/mm/aaaa."""
-    match = _PADROES_DATA_BR.search(texto)
-    if match:
-        try:
-            dia, mes, ano = int(match.group(1)), int(match.group(2)), int(match.group(3))
-            return date(ano, mes, dia)
-        except (ValueError, OverflowError):
-            pass
-    return None
-
-
-def extrair_favorecido(texto: str) -> str | None:
-    """Tenta extrair o nome do favorecido/destinatário após 'para' ou 'favorecido'."""
-    padroes = [
-        re.compile(r"(?:para|favorecido[:\s]*)\s*([A-ZÀ-Ú][A-ZÀ-Úa-zà-ú\s]+?)(?:\s+(?:Itaú|Banco|Bradesco|Caixa|Santander|Nubank|ag[êe]ncia|conta|CPF|CNPJ|$))", re.IGNORECASE),
-    ]
-    for padrao in padroes:
-        match = padrao.search(texto)
-        if match:
-            nome = match.group(1).strip()
-            if len(nome) > 3:
-                return nome
-    return None
-
-
-def extrair_dados_por_regex(texto: str) -> dict:
-    """Extrai valor, data e favorecido via regex.
-
-    Returns:
-        Dicionário com ``valor``, ``data_pagamento``, ``favorecido``
-        e ``confidence`` baseada na quantidade de campos extraídos.
-    """
-    dados: dict = {"valor": None, "data_pagamento": None, "favorecido": None}
-
-    valor = extrair_valor(texto)
-    if valor:
-        dados["valor"] = valor
-
-    data = extrair_data(texto)
-    if data:
-        dados["data_pagamento"] = data
-
-    favorecido = extrair_favorecido(texto)
-    if favorecido:
-        dados["favorecido"] = favorecido
-
-    # Confidence baseada em quantos campos foram extraídos
-    campos = sum(1 for v in dados.values() if v is not None)
-    dados["confidence"] = round(campos / 3, 2)
-
-    return dados
 
 
 # ── Prompt ultra-simplificado para modelo 1B ──────────────────────────
@@ -185,8 +96,15 @@ class OllamaService:
             ``favorecido`` (str|None) e ``confidence`` (float),
             ou ``None`` se não conseguir extrair ao menos o valor.
         """
-        dados = extrair_dados_por_regex(texto_ocr)
+        valor = extrair_valor(texto_ocr)
+        data = extrair_data(texto_ocr)
+
+        dados: dict = {"valor": valor, "data_pagamento": data, "favorecido": None}
+
         if dados["valor"] is None:
             logger.info("Não foi possível extrair valor do texto OCR")
             return None
+
+        campos = sum(1 for v in dados.values() if v is not None)
+        dados["confidence"] = round(campos / 3, 2)
         return dados

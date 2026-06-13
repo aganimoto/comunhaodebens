@@ -19,15 +19,12 @@ import logging
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from src.api.sse_utils import sse_payload
 from src.application.services.debug_logger import get_debug_logger
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/debug", tags=["debug"])
-
-
-def _sse_payload(event: str, data: str) -> str:
-    return f"event: {event}\ndata: {data}\n\n"
 
 
 @router.get("/stream")
@@ -40,7 +37,7 @@ async def debug_stream():
         while True:
             entries = debug_logger.get_entries()
             for i in range(ultimo_enviado, len(entries)):
-                yield _sse_payload("debug-log", json.dumps(entries[i], ensure_ascii=False))
+                yield sse_payload("debug-log", json.dumps(entries[i], ensure_ascii=False))
                 ultimo_enviado = i + 1
 
             if not entries:
