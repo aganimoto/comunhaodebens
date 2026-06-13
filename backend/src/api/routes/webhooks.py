@@ -4,14 +4,10 @@ import hmac
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from src.application.services.debug_logger import MODULO_WEBHOOK, get_debug_logger
-from src.application.services.ocr_logger import (
-    ETAPA_IMAGEM_RECEBIDA,
-    criar_logger,
-)
 from src.application.use_cases.processar_comprovante import ProcessarComprovanteUseCase
 from src.config import get_settings
 from src.domain.events.novo_comprovante_recebido import NovoComprovanteRecebido

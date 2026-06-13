@@ -1,7 +1,4 @@
 """Endpoints REST para Contribuições — dados vindos do Google Sheets."""
-import uuid
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 

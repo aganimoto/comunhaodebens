@@ -1,6 +1,4 @@
 """Endpoints de Pendências — dados do Google Sheets."""
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
