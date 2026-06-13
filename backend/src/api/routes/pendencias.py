@@ -19,7 +19,7 @@ async def listar(
     if not client.available:
         return []
 
-    rows = client.get_values("Pendências!A1:G5000")
+    rows = client.get_values("Pendências!A:G")
     if not rows or len(rows) < 2:
         return []
 

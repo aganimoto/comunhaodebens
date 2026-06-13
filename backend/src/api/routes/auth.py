@@ -3,20 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 from jose import jwt
-import bcrypt
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _hash_senha(senha: str) -> str:
-    return bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
-
-
-def _verificar_senha(senha: str, hash_senha: str) -> bool:
-    return bcrypt.checkpw(senha.encode(), hash_senha.encode())
 
 
 class LoginRequest(BaseModel):
@@ -47,9 +38,8 @@ async def login(body: LoginRequest):
     if body.email != settings.bootstrap_admin_email:
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
 
-    # Verificar senha
-    admin_hash = _hash_senha(settings.bootstrap_admin_password)
-    if not _verificar_senha(body.senha, admin_hash):
+    # Comparação direta de senha (sem bcrypt, já que é único admin via env var)
+    if body.senha != settings.bootstrap_admin_password:
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
 
     return TokenResponse(

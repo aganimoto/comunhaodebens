@@ -59,7 +59,11 @@ class ProcessarComprovanteUseCase:
         # Identificar membro
         membro = await self._identificacao.identificar(telefone)
         nome_membro = membro.nome if membro else "(não cadastrado)"
-        categoria_membro = membro.categoria if membro else "benfeitor"
+        from src.domain.entities.membro import CategoriaMembro
+        if membro and membro.categoria in CategoriaMembro._value2member_map_:
+            categoria_membro = membro.categoria
+        else:
+            categoria_membro = "benfeitor"
 
         if not membro:
             logger.info("Telefone não cadastrado: %s", _hash_telefone_log(telefone))

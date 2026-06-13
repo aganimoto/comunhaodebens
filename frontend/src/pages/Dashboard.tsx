@@ -32,44 +32,24 @@ import { formatBRL, formatDateTime } from "../components/ui/utils";
 import { useToast } from "../hooks/use-toast";
 import { OCRProgressBar } from "../components/OCRProgressBar";
 
-type ContribuicaoResumo = {
-  id: string;
-  protocolo: string;
-  telefone: string;
-  valor: number;
-  data_pagamento: string;
-  status: string;
-  confianca: number;
-};
-
-type PendenciaResumo = {
-  id: string;
-  telefone: string | null;
-  motivo: string;
-  status: string;
-  contribuicao_id: string | null;
-  criado_em: string | null;
-};
-
 type Stats = {
   total_contribuicoes: number;
   contribuicoes_confirmadas: number;
-  contribuicoes_revisao: number;
   contribuicoes_pendentes: number;
-  contribuicoes_processando: number;
   pendencias_abertas: number;
   valor_total_confirmado: number;
   valor_hoje: number;
   valor_mes: number;
   ultimas_contribuicoes: ContribuicaoResumo[];
-  pendencias_ocr: PendenciaResumo[];
-  processando_hashes?: string[];
 };
 
-const MOTIVO_LABEL: Record<string, string> = {
-  ocr_baixa_confianca: "OCR com baixa confiança",
-  ia_baixa_confianca: "IA com baixa confiança",
-  erro_processamento: "Erro de processamento",
+type ContribuicaoResumo = {
+  protocolo: string;
+  data: string;
+  nome: string;
+  valor: string;
+  status: string;
+  confianca: string;
 };
 
 export function Dashboard() {
@@ -87,31 +67,28 @@ export function Dashboard() {
   const [ocrHashes, setOcrHashes] = useState<string[]>([]);
 
   const reprocessar = useMutation({
-    mutationFn: (id: string) =>
-      api.post(`/contribuicoes/${id}/reprocessar`),
+    mutationFn: (protocolo: string) =>
+      api.post(`/contribuicoes/${protocolo}/reprocessar`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dashboard-stats"] });
       qc.invalidateQueries({ queryKey: ["pendencias"] });
-      // Recarrega stats para pegar processamentos ativos
       toast({
-        title: "Reprocessamento iniciado",
-        description: "Aguarde alguns instantes e atualize a tela.",
+        title: "Reprocessamento solicitado",
+        description: "Reenvie o comprovante pelo WhatsApp para reprocessar.",
         variant: "success",
       });
     },
     onError: () =>
       toast({
         title: "Erro ao reprocessar",
-        description: "Tente novamente em alguns instantes.",
+        description: "Reprocessamento manual não disponível. Reenvie pelo WhatsApp.",
         variant: "destructive",
       }),
   });
 
   // Sincroniza hashes das contribuições em processamento
   useEffect(() => {
-    if (stats?.processando_hashes && stats.processando_hashes.length > 0) {
-      setOcrHashes(stats.processando_hashes);
-    } else if (stats && stats.contribuicoes_processando === 0) {
+    if (stats) {
       setOcrHashes([]);
     }
   }, [stats]);
@@ -120,7 +97,6 @@ export function Dashboard() {
     ? [
         { name: "Confirmadas", valor: stats.contribuicoes_confirmadas },
         { name: "Pendentes", valor: stats.contribuicoes_pendentes },
-        { name: "Processando", valor: stats.contribuicoes_processando },
         { name: "Pendências", valor: stats.pendencias_abertas },
       ]
     : [];
@@ -135,7 +111,7 @@ export function Dashboard() {
         </p>
       </div>
 
-      {/* Linha 1: cards clássicos + Fase 6 (hoje/mês) */}
+      {/* Linha 1: cards clássicos */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Total contribuições"
@@ -163,23 +139,8 @@ export function Dashboard() {
         />
       </div>
 
-      {/* ── Progresso OCR em tempo real ── */}
-      {stats && stats.contribuicoes_processando > 0 && ocrHashes.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {ocrHashes.map((hash) => (
-            <OCRProgressBar
-              key={hash}
-              identificador={hash}
-              onConcluido={() => {
-                qc.invalidateQueries({ queryKey: ["dashboard-stats"] });
-              }}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Linha 2: status (pílulas) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      {/* Linha 2: status */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard
           title="Confirmadas"
           value={stats?.contribuicoes_confirmadas ?? "—"}
@@ -189,12 +150,6 @@ export function Dashboard() {
         <StatCard
           title="Pendentes"
           value={stats?.contribuicoes_pendentes ?? "—"}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          tone="warning"
-        />
-        <StatCard
-          title="Em revisão (legado)"
-          value={stats?.contribuicoes_revisao ?? "—"}
           icon={<AlertTriangle className="h-5 w-5" />}
           tone="warning"
         />
@@ -250,21 +205,21 @@ export function Dashboard() {
             <ul className="divide-y">
               {stats.ultimas_contribuicoes.map((c) => (
                 <li
-                  key={c.id}
+                  key={c.protocolo}
                   className="py-3 flex items-center justify-between gap-4"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="font-mono text-xs">{c.protocolo}</p>
                     <p className="text-sm text-muted-foreground">
-                      {c.telefone} · {c.data_pagamento}
+                      {c.nome} · {c.data}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <Badge
                       variant={
-                        c.status === "confirmado"
+                        c.status === "CONFIRMADO"
                           ? "success"
-                          : c.status === "pendente"
+                          : c.status === "PENDENTE"
                           ? "warning"
                           : "secondary"
                       }
@@ -272,23 +227,8 @@ export function Dashboard() {
                       {c.status}
                     </Badge>
                     <span className="font-medium tabular-nums">
-                      {formatBRL(c.valor)}
+                      {c.valor}
                     </span>
-                    {c.status === "pendente" || c.status === "erro" ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => reprocessar.mutate(c.id)}
-                        disabled={reprocessar.isPending}
-                      >
-                        {reprocessar.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-4 w-4" />
-                        )}
-                        Reprocessar
-                      </Button>
-                    ) : null}
                   </div>
                 </li>
               ))}
@@ -296,58 +236,6 @@ export function Dashboard() {
           ) : (
             <div className="text-center py-8 text-muted-foreground text-sm">
               Nenhuma contribuição registrada ainda.
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Pendências OCR/IA com botão Reprocessar */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Pendências OCR / IA</CardTitle>
-          <CardDescription>
-            Comprovantes com falha de leitura — clique em "Reprocessar"
-            para reexecutar o OCR/IA sem precisar reenviar pelo WhatsApp.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {stats?.pendencias_ocr?.length ? (
-            <ul className="divide-y">
-              {stats.pendencias_ocr.map((p) => (
-                <li
-                  key={p.id}
-                  className="py-3 flex items-center justify-between gap-4"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium truncate">
-                      {MOTIVO_LABEL[p.motivo] ?? p.motivo}
-                    </p>
-                    <p className="text-xs text-muted-foreground font-mono">
-                      {p.telefone ?? "—"} · {p.criado_em ?? "—"}
-                    </p>
-                  </div>
-                  {p.contribuicao_id ? (
-                    <Button
-                      size="sm"
-                      onClick={() => reprocessar.mutate(p.contribuicao_id!)}
-                      disabled={reprocessar.isPending}
-                    >
-                      {reprocessar.isPending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4" />
-                      )}
-                      Reprocessar
-                    </Button>
-                  ) : (
-                    <Badge variant="warning">Sem contribuição</Badge>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-center py-8 text-muted-foreground text-sm">
-              🎉 Nenhuma pendência de OCR/IA. Tudo processado com sucesso!
             </div>
           )}
         </CardContent>

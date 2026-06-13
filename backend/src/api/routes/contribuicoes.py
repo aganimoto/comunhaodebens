@@ -35,7 +35,7 @@ async def listar(
     if not client.available:
         raise HTTPException(503, "Google Sheets indisponível")
 
-    rows = client.get_values("Doações!A1:J1000")
+    rows = client.get_values("Doações!A:J")
     if not rows or len(rows) < 2:
         return {"items": [], "total": 0, "skip": skip, "limit": limit}
 
@@ -75,7 +75,7 @@ async def detalhe(
     if not client.available:
         raise HTTPException(503, "Google Sheets indisponível")
 
-    rows = client.get_values("Doações!A1:J1000")
+    rows = client.get_values("Doações!A:J")
     if not rows or len(rows) < 2:
         raise HTTPException(404, "Não encontrada")
 

@@ -1,4 +1,5 @@
 import os
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     # Caminho de saída de PDFs de relatório em dev (sem volume compartilhado)
     dev_relatorios_path: str = "./dev_data/relatorios"
     dev_backup_path: str = "./dev_data/backups"
+    # Database
+    database_url: str = "sqlite+aiosqlite:///dev.db"
+
     # Primeiro admin criado pelo script create_admin
     bootstrap_admin_email: str = "admin@cdbshalom.local"
     bootstrap_admin_password: str = "TroqueEstaSenha123!"
@@ -82,4 +86,19 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+
+    # Validar secrets em produção para evitar uso de valores padrão
+    if not settings.dev_mode:
+        if settings.jwt_secret_key == "dev-jwt-secret-change-me-64-chars-minimum-for-hs256":
+            warnings.warn(
+                "JWT_SECRET_KEY está usando o valor padrão de desenvolvimento! "
+                "Defina uma chave segura no .env para produção."
+            )
+        if settings.whatsapp_webhook_secret == "dev-secret-change-me":
+            warnings.warn(
+                "WHATSAPP_WEBHOOK_SECRET está usando o valor padrão de desenvolvimento! "
+                "Defina um segredo seguro no .env para produção."
+            )
+
+    return settings

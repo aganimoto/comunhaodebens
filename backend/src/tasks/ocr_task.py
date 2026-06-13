@@ -263,4 +263,3 @@ def _registrar_erro(
         telefone=telefone,
     )
     ocr_logger.registrar_erro(ETAPA_ERRO, f"Erro: {motivo}")
-    asyncio.run(remover_logger(hash_sha256))

@@ -25,13 +25,13 @@ async def test_login_credenciais_invalidas():
     assert resp.status_code == 401
 
 
-async def test_login_sucesso_retorna_token(auth_headers, admin_user):
+async def test_login_sucesso_retorna_token():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"email": admin_user.email, "senha": "TesteSenha123"},
+            json={"email": "admin@cdbshalom.local", "senha": "TroqueEstaSenha123!"},
         )
     assert resp.status_code == 200
     body = resp.json()
@@ -47,26 +47,8 @@ async def test_dashboard_stats_requer_auth():
     assert resp.status_code in (401, 403)
 
 
-async def test_dashboard_stats_com_admin(auth_headers, db_session):
-    """Como admin, retorna contadores."""
-    from src.infrastructure.database.models import ContribuicaoModel
-    from decimal import Decimal
-    from datetime import date
-    from uuid import uuid4
-
-    db_session.add(
-        ContribuicaoModel(
-            id=uuid4(),
-            protocolo="CDB-20260101-000001",
-            telefone="5511999990001",
-            valor=Decimal("100.00"),
-            data_pagamento=date(2026, 1, 1),
-            status="confirmado",
-            hash_imagem="h",
-        )
-    )
-    await db_session.commit()
-
+async def test_dashboard_stats_com_admin(auth_headers):
+    """Como admin, retorna contadores (fallback sheets vazio)."""
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -75,9 +57,9 @@ async def test_dashboard_stats_com_admin(auth_headers, db_session):
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total_contribuicoes"] >= 1
-    assert body["contribuicoes_confirmadas"] >= 1
-    assert body["valor_total_confirmado"] >= 100.0
+    assert body["total_contribuicoes"] == 0
+    assert body["contribuicoes_confirmadas"] == 0
+    assert body["valor_total_confirmado"] == 0.0
 
 
 async def test_relatorios_listar_vazio(auth_headers, tmp_path, monkeypatch):

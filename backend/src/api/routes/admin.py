@@ -43,14 +43,14 @@ class DashboardStats(BaseModel):
 
 
 def _ler_doacoes(client: SheetsClient) -> list[list[str]]:
-    rows = client.get_values("Doações!A1:J5000")
+    rows = client.get_values("Doações!A:J")
     if not rows or len(rows) < 2:
         return []
     return rows[1:]  # Pular cabeçalho
 
 
 def _ler_pendencias(client: SheetsClient) -> list[list[str]]:
-    rows = client.get_values("Pendências!A1:G5000")
+    rows = client.get_values("Pendências!A:G")
     if not rows or len(rows) < 2:
         return []
     return rows[1:]

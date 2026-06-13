@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import hmac
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -13,6 +15,8 @@ from src.application.services.ocr_logger import (
 from src.application.use_cases.processar_comprovante import ProcessarComprovanteUseCase
 from src.config import get_settings
 from src.domain.events.novo_comprovante_recebido import NovoComprovanteRecebido
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -33,6 +37,38 @@ def _verify_hmac(body: bytes, signature: str | None) -> None:
     expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
     if not signature or not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=401, detail="Assinatura HMAC inválida")
+
+
+async def _processar_comprovante_com_retry(payload: WhatsAppWebhookPayload, max_retries: int = 3) -> dict:
+    """Processa o comprovante com retry em caso de falha."""
+    ultimo_erro = None
+    for tentativa in range(max_retries):
+        try:
+            evento = NovoComprovanteRecebido(
+                telefone=payload.telefone,
+                whatsapp_msg_id=payload.whatsapp_msg_id,
+                timestamp=datetime.fromisoformat(payload.timestamp),
+                tipo_midia=payload.tipo_midia,
+                caminho_arquivo=payload.caminho_arquivo,
+                hash_sha256=payload.hash_sha256,
+            )
+            uc = ProcessarComprovanteUseCase()
+            result = await uc.executar(evento)
+            return result
+        except Exception as exc:
+            ultimo_erro = exc
+            logger.warning(
+                "Tentativa %d/%d falhou ao processar comprovante %s: %s",
+                tentativa + 1, max_retries, payload.hash_sha256[:12], exc,
+            )
+            if tentativa < max_retries - 1:
+                await asyncio.sleep(2 ** tentativa)  # backoff exponencial: 1s, 2s, 4s
+
+    logger.error(
+        "Todas as %d tentativas falharam para comprovante %s: %s",
+        max_retries, payload.hash_sha256[:12], ultimo_erro,
+    )
+    return {"status": "erro", "motivo": f"falha_apos_retry: {ultimo_erro}"}
 
 
 @router.post("/whatsapp")
@@ -60,16 +96,7 @@ async def whatsapp_webhook(
         },
     )
 
-    evento = NovoComprovanteRecebido(
-        telefone=payload.telefone,
-        whatsapp_msg_id=payload.whatsapp_msg_id,
-        timestamp=datetime.fromisoformat(payload.timestamp),
-        tipo_midia=payload.tipo_midia,
-        caminho_arquivo=payload.caminho_arquivo,
-        hash_sha256=payload.hash_sha256,
-    )
-    uc = ProcessarComprovanteUseCase()
-    result = await uc.executar(evento)
+    result = await _processar_comprovante_com_retry(payload)
     _debug.info(
         MODULO_WEBHOOK,
         "Processamento concluído",
