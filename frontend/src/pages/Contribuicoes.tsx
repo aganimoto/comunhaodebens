@@ -28,7 +28,7 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { Select, SelectItem } from "../components/ui/select";
-import { formatBRL, formatDate } from "../components/ui/utils";
+import { formatBRL, formatDate } from "../lib/utils";
 import { useToast } from "../hooks/use-toast";
 
 type Item = {

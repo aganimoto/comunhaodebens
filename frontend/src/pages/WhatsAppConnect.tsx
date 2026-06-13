@@ -20,7 +20,7 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/api";
-import { cn } from "../components/ui/utils";
+import { cn } from "../lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────
 type WhatsAppStatus = "connected" | "qr_pending" | "disconnected";

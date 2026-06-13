@@ -22,7 +22,7 @@ import {
   DialogTrigger,
 } from "../components/ui/dialog";
 import { useToast } from "../hooks/use-toast";
-import { formatDateTime } from "../components/ui/utils";
+import { formatDateTime } from "../lib/utils";
 
 type Relatorio = {
   nome: string;

@@ -28,7 +28,7 @@ import {
 } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { formatBRL, formatDateTime } from "../components/ui/utils";
+import { formatBRL, formatDateTime } from "../lib/utils";
 import { useToast } from "../hooks/use-toast";
 import { OCRProgressBar } from "../components/OCRProgressBar";
 
